@@ -57,7 +57,7 @@ jobs:
       BUNDLE_ID: ${{ inputs.bundle_id }}
       REQUESTED_DEVICE: ${{ inputs.simulator_name }}
       REQUESTED_RUNTIME: ${{ inputs.ios_runtime }}
-      DERIVED_DATA: ${{ runner.temp }}/AgentPreviewDerivedData
+      DERIVED_DATA: ${{ github.workspace }}/.agent-preview-derived-data
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,7 +72,7 @@ jobs:
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/AgentPreviewDerivedData/SourcePackages
+          path: ${{ github.workspace }}/.agent-preview-derived-data/SourcePackages
           key: swift-packages-${{ runner.os }}-xcode26.6-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
           restore-keys: swift-packages-${{ runner.os }}-xcode26.6-
       - name: Sync icon and generate project
@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           bash -e -c "$SYNC_COMMAND"
           bash -e -c "$GENERATE_COMMAND"
-      - name: Select and boot an installed iOS Simulator
+      - name: Select an installed iOS Simulator
         id: sim
         run: |
           set -euo pipefail
@@ -103,6 +103,8 @@ jobs:
               out.write('udid='+device['udid']+'\nname='+device['name']+'\n')
           print('Selected '+device['name']+' ('+device['udid']+')')
           PY
+      - name: Boot selected Simulator
+        run: |
           xcrun simctl boot "${{ steps.sim.outputs.udid }}"
           xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
       - name: Build and run tests without signing

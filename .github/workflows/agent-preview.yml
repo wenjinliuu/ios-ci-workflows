@@ -143,9 +143,33 @@ jobs:
         if: success()
         continue-on-error: true
         run: |
-          npx --yes xcodebuildmcp@2.7.0 ui-automation snapshot-ui \
-            --simulator-id "${{ steps.sim.outputs.udid }}" --output json \
-            > build/agent-preview/ui-tree.json
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            npx --yes xcodebuildmcp@2.7.0 ui-automation snapshot-ui \
+              --simulator-id "${{ steps.sim.outputs.udid }}" --output json \
+              > build/agent-preview/ui-tree.json || true
+            if python3 - <<'PY'
+          import json
+          try:
+              with open('build/agent-preview/ui-tree.json') as artifact:
+                  snapshot = json.load(artifact)
+              assert not snapshot.get('didError')
+              assert snapshot.get('data', {}).get('summary', {}).get('status') != 'FAILED'
+          except (ValueError, OSError, AssertionError):
+              raise SystemExit(1)
+          PY
+            then
+              echo 'Accessibility hierarchy captured.'
+              exit 0
+            fi
+            if grep -q 'No translation object returned for simulator' build/agent-preview/ui-tree.json; then
+              # AXe can lose its host bridge on iOS 26; launchd restarts this process.
+              pkill -9 -f '/usr/libexec/CoreSimulatorBridge' || true
+            fi
+            sleep 5
+          done
+          echo '::warning::XcodeBuildMCP could not capture the Simulator accessibility hierarchy; inspect ui-tree.json in the artifact.'
+          exit 1
       - name: Start authenticated browser session
         if: ${{ success() && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
         uses: actions/checkout@v4

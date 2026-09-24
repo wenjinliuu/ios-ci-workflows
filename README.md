@@ -5,6 +5,7 @@ Reusable workflows for `lottery-ios`, `calenease` and `cichu-ios`:
 
 - `app-icon.yml`: unsigned Xcode archive verifies the native `.icon` bundle; an optional third-party renderer uploads previews.
 - `agent-preview.yml`: unsigned Simulator XCTest, app launch, screenshot, XcodeBuildMCP accessibility snapshot, logs and optional authenticated browser session.
+- `testflight-release.yml`: shared unsigned archive, optional Apple registration check, entitlement embedding, export signing and upload; supports a dry-run archive with no upload.
 
 Each App calls a fixed commit SHA and keeps its own parameters and secrets. The run and artifacts stay in the calling App repository. `scripts/preview-proxy.cjs` is fetched at the same pinned commit only for a manually requested live session.
 

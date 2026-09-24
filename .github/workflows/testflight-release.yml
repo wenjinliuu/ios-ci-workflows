@@ -1,0 +1,237 @@
+name: Reusable TestFlight Release
+
+on:
+  workflow_call:
+    inputs:
+      workdir: {type: string, required: true}
+      project: {type: string, required: true}
+      scheme: {type: string, required: true}
+      bundle_id: {type: string, required: true}
+      sync_command: {type: string, required: true}
+      generate_command: {type: string, required: true}
+      entitlements_path: {type: string, default: ''}
+      entitlement_mode: {type: string, default: none}
+      icloud_container: {type: string, default: ''}
+      asc_verify_command: {type: string, default: ''}
+      lookup_only: {type: boolean, default: false}
+      dry_run: {type: boolean, default: false}
+      build_number: {type: string, default: ''}
+      marketing_version: {type: string, default: ''}
+      display_name: {type: string, default: ''}
+      inspect_icloud: {type: boolean, default: false}
+      expected_team_id: {type: string, default: ''}
+      artifact_prefix: {type: string, default: ''}
+    secrets:
+      APPLE_TEAM_ID: {required: true}
+      APP_STORE_CONNECT_KEY_ID: {required: true}
+      APP_STORE_CONNECT_ISSUER_ID: {required: true}
+      APP_STORE_CONNECT_PRIVATE_KEY: {required: true}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: ${{ inputs.asc_verify_command != '' && !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      icloud: ${{ steps.check.outputs.icloud }}
+    env:
+      KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+      EXPECTED_BUNDLE_ID: ${{ inputs.bundle_id }}
+      REQUIRED_CAPABILITIES: ICLOUD
+      ICLOUD_CONTAINER: ${{ inputs.icloud_container }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify App Store Connect registration
+        id: check
+        env:
+          VERIFY_COMMAND: ${{ inputs.asc_verify_command }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          pip install --quiet 'pyjwt[crypto]'
+          if [ "${{ inputs.lookup_only }}" = true ]; then unset REQUIRED_CAPABILITIES EXPECTED_BUNDLE_ID; fi
+          cd "${{ inputs.workdir }}"
+          bash -e -c "$VERIFY_COMMAND"
+      - name: Clean up API key
+        if: always()
+        run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
+  release:
+    needs: verify
+    if: ${{ always() && !cancelled() && !inputs.lookup_only && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    runs-on: macos-26
+    timeout-minutes: 55
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    env:
+      PROJECT: ${{ inputs.project }}
+      SCHEME: ${{ inputs.scheme }}
+      EXPECTED_BUNDLE_ID: ${{ inputs.bundle_id }}
+      EXPECTED_DISPLAY_NAME: ${{ inputs.display_name }}
+      EXPECTED_TEAM_ID: ${{ inputs.expected_team_id }}
+      ENTITLEMENTS_PATH: ${{ inputs.entitlements_path }}
+      ENTITLEMENT_MODE: ${{ inputs.entitlement_mode }}
+      ICLOUD_CONTAINER: ${{ inputs.icloud_container }}
+      ENABLE_ICLOUD: ${{ needs.verify.outputs.icloud }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+      - name: Sync artwork and generate project
+        env:
+          SYNC_COMMAND: ${{ inputs.sync_command }}
+          GENERATE_COMMAND: ${{ inputs.generate_command }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then brew install xcodegen; fi
+          bash -e -c "$SYNC_COMMAND"
+          DEVELOPMENT_TEAM="$TEAM_ID" bash -e -c "$GENERATE_COMMAND"
+          if [ "${{ inputs.dry_run }}" != true ]; then
+            test -n "$TEAM_ID" && test -n "$KEY_ID" && test -n "$ISSUER_ID" && test -n "$PRIVATE_KEY"
+            if [ -n "$EXPECTED_TEAM_ID" ]; then test "$TEAM_ID" = "$EXPECTED_TEAM_ID"; fi
+            mkdir -p ~/.appstoreconnect/private_keys
+            printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+            chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          fi
+      - name: Resolve version numbers
+        id: version
+        env:
+          REQUESTED_NUMBER: ${{ inputs.build_number }}
+          REQUESTED_VERSION: ${{ inputs.marketing_version }}
+        run: |
+          NUMBER=${REQUESTED_NUMBER:-$GITHUB_RUN_NUMBER}
+          [[ "$NUMBER" =~ ^[0-9]+$ ]] || exit 1
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            [[ "$REQUESTED_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || exit 1
+          fi
+      - name: Archive unsigned
+        env:
+          REQUESTED_VERSION: ${{ inputs.marketing_version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          flags=()
+          if [ -n "$REQUESTED_VERSION" ]; then flags+=("MARKETING_VERSION=$REQUESTED_VERSION"); fi
+          xcodebuild archive -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "build/${SCHEME}.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM="$TEAM_ID" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER" "${flags[@]}" \
+            2>&1 | tee build/release-archive.log
+      - name: Verify archived app and embedded icon
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "build/${SCHEME}.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -type d -print -quit)
+          test -n "$APP_PATH" && test -f "$APP_PATH/Assets.car"
+          find "$APP_PATH" -maxdepth 1 -type f -name 'AppIcon*.png' -print -quit | grep -q .
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "$EXPECTED_BUNDLE_ID"
+          if [ -n "$EXPECTED_DISPLAY_NAME" ]; then
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist")" = "$EXPECTED_DISPLAY_NAME"
+          fi
+      - name: Embed entitlements into unsigned archive
+        if: ${{ !inputs.dry_run && inputs.entitlement_mode != 'none' }}
+        continue-on-error: ${{ inputs.entitlement_mode == 'best-effort' }}
+        run: |
+          set -euo pipefail
+          if [ "$ENTITLEMENT_MODE" = "icloud-verified" ] && [ "$ENABLE_ICLOUD" != true ]; then exit 0; fi
+          APP_PATH=$(find "build/${SCHEME}.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -type d -print -quit)
+          test -f "$ENTITLEMENTS_PATH"
+          if [ -n "$ICLOUD_CONTAINER" ]; then grep -q "$ICLOUD_CONTAINER" "$ENTITLEMENTS_PATH"; fi
+          codesign --force --sign - --entitlements "$ENTITLEMENTS_PATH" --generate-entitlement-der "$APP_PATH"
+      - name: Write export options
+        if: ${{ !inputs.dry_run }}
+        run: |
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>method</key><string>app-store-connect</string>
+          <key>teamID</key><string>${TEAM_ID}</string>
+          <key>signingStyle</key><string>automatic</string>
+          <key>uploadSymbols</key><true/>
+          <key>destination</key><string>upload</string>
+          </dict></plist>
+          PLIST
+      - name: Export, sign and upload to TestFlight
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive -archivePath "build/${SCHEME}.xcarchive" \
+            -exportOptionsPlist build/ExportOptions.plist -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
+            2>&1 | tee build/release-export.log
+      - name: Inspect exported iCloud entitlements (informational)
+        if: ${{ always() && inputs.inspect_icloud && !inputs.dry_run }}
+        continue-on-error: true
+        run: |
+          set +e
+          cat > build/ExportOptionsLocal.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+          <key>method</key><string>app-store-connect</string>
+          <key>teamID</key><string>${TEAM_ID}</string>
+          <key>signingStyle</key><string>automatic</string>
+          <key>uploadSymbols</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "build/${SCHEME}.xcarchive" \
+            -exportOptionsPlist build/ExportOptionsLocal.plist -exportPath build/inspect \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
+            > build/inspect-export.log 2>&1 || exit 0
+          IPA=$(find build/inspect -maxdepth 2 -name '*.ipa' -print -quit)
+          test -n "$IPA" || exit 0
+          mkdir -p build/unzipped
+          unzip -q "$IPA" -d build/unzipped
+          APP=$(find build/unzipped/Payload -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP" || exit 0
+          codesign -d --entitlements :- --xml "$APP" 2>/dev/null \
+            | plutil -convert xml1 -o - - | tee build/entitlements.txt
+          security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null \
+            | plutil -extract Entitlements xml1 -o - - | tee build/profile-entitlements.txt
+          if grep -q 'ubiquity-container-identifiers' build/entitlements.txt; then
+            echo 'Binary has iCloud ubiquity entitlement'
+          else
+            echo 'Binary has no iCloud ubiquity entitlement'
+          fi
+      - name: Upload entitlement report
+        if: ${{ always() && inputs.inspect_icloud }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: entitlements-${{ steps.version.outputs.number }}
+          path: |
+            ${{ inputs.workdir }}/build/entitlements.txt
+            ${{ inputs.workdir }}/build/profile-entitlements.txt
+          if-no-files-found: ignore
+      - name: Upload dSYMs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_prefix }}dsyms-${{ steps.version.outputs.number }}
+          path: ${{ inputs.workdir }}/build/${{ inputs.scheme }}.xcarchive/dSYMs
+          if-no-files-found: ignore
+      - name: Clean up API key
+        if: always()
+        run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8

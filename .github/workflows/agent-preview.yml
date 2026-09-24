@@ -36,6 +36,15 @@ on:
       ci_revision:
         type: string
         required: true
+      screenshot_scheme:
+        type: string
+        default: ''
+      capture_screenshots:
+        type: boolean
+        default: false
+      screenshot_device:
+        type: string
+        default: iPhone 17 Pro Max
     secrets:
       AGENT_PREVIEW_PASSWORD:
         required: false
@@ -197,3 +206,70 @@ jobs:
           path: ${{ inputs.workdir }}/build/agent-preview/Test.xcresult
           if-no-files-found: ignore
           retention-days: 7
+  screenshots:
+    if: ${{ inputs.capture_screenshots && inputs.screenshot_scheme != '' && github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-26
+    timeout-minutes: 50
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+      - name: Sync and generate project
+        env:
+          SYNC_COMMAND: ${{ inputs.sync_command }}
+          GENERATE_COMMAND: ${{ inputs.generate_command }}
+        run: |
+          set -euo pipefail
+          if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then brew install xcodegen; fi
+          bash -e -c "$SYNC_COMMAND"
+          bash -e -c "$GENERATE_COMMAND"
+      - name: Run screenshot UI tests
+        env:
+          SCREENSHOT_SCHEME: ${{ inputs.screenshot_scheme }}
+          SIM_NAME: ${{ inputs.screenshot_device }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/screenshots
+          xcodebuild test -project "$PROJECT" -scheme "$SCREENSHOT_SCHEME" \
+            -configuration Debug -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -resultBundlePath build/Screenshots.xcresult CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/screenshots-test.log
+      - name: Export screenshots
+        if: always()
+        run: |
+          mkdir -p build/screenshots
+          if [ -d build/Screenshots.xcresult ]; then
+            xcrun xcresulttool export attachments --path build/Screenshots.xcresult \
+              --output-path build/screenshots
+          fi
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: ${{ inputs.workdir }}/build/screenshots
+          if-no-files-found: warn
+      - name: Publish screenshots to ci/screenshots
+        if: success()
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A "$GITHUB_WORKSPACE/${{ inputs.workdir }}/build/screenshots" 2>/dev/null)" ]; then exit 0; fi
+          mkdir publish && cd publish
+          cp -R "$GITHUB_WORKSPACE/${{ inputs.workdir }}/build/screenshots/." .
+          git init -q
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Screenshots from run $GITHUB_RUN_NUMBER ($GITHUB_SHA)"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/ci/screenshots

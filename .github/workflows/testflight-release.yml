@@ -129,12 +129,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build
-          flags=()
+          flags=("CURRENT_PROJECT_VERSION=$BUILD_NUMBER")
           if [ -n "$REQUESTED_VERSION" ]; then flags+=("MARKETING_VERSION=$REQUESTED_VERSION"); fi
           xcodebuild archive -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "build/${SCHEME}.xcarchive" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
-            DEVELOPMENT_TEAM="$TEAM_ID" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER" "${flags[@]}" \
+            DEVELOPMENT_TEAM="$TEAM_ID" "${flags[@]}" \
             2>&1 | tee build/release-archive.log
       - name: Verify archived app and embedded icon
         run: |

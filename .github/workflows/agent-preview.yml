@@ -1,0 +1,197 @@
+name: Reusable Agent Preview
+
+on:
+  workflow_call:
+    inputs:
+      workdir:
+        type: string
+        required: true
+      project:
+        type: string
+        required: true
+      scheme:
+        type: string
+        required: true
+      bundle_id:
+        type: string
+        required: true
+      sync_command:
+        type: string
+        required: true
+      generate_command:
+        type: string
+        required: true
+      simulator_name:
+        type: string
+        default: iPhone 17 Pro
+      ios_runtime:
+        type: string
+        default: '26'
+      live_preview:
+        type: boolean
+        default: false
+      preview_minutes:
+        type: number
+        default: 12
+      ci_revision:
+        type: string
+        required: true
+    secrets:
+      AGENT_PREVIEW_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 65
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    env:
+      PROJECT: ${{ inputs.project }}
+      SCHEME: ${{ inputs.scheme }}
+      BUNDLE_ID: ${{ inputs.bundle_id }}
+      REQUESTED_DEVICE: ${{ inputs.simulator_name }}
+      REQUESTED_RUNTIME: ${{ inputs.ios_runtime }}
+      DERIVED_DATA: ${{ runner.temp }}/AgentPreviewDerivedData
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+      - name: Check toolchain and install project generator
+        run: |
+          xcodebuild -version
+          if [[ "${{ inputs.generate_command }}" == *xcodegen* ]]; then brew install xcodegen; fi
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/AgentPreviewDerivedData/SourcePackages
+          key: swift-packages-${{ runner.os }}-xcode26.6-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
+          restore-keys: swift-packages-${{ runner.os }}-xcode26.6-
+      - name: Sync icon and generate project
+        env:
+          SYNC_COMMAND: ${{ inputs.sync_command }}
+          GENERATE_COMMAND: ${{ inputs.generate_command }}
+        run: |
+          set -euo pipefail
+          bash -e -c "$SYNC_COMMAND"
+          bash -e -c "$GENERATE_COMMAND"
+      - name: Select and boot an installed iOS Simulator
+        id: sim
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          items=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json']))['devices']
+          found=[]
+          for runtime, devices in items.items():
+              if 'iOS' not in runtime or os.environ['REQUESTED_RUNTIME'] not in runtime: continue
+              for d in devices:
+                  if d['name'].startswith('iPhone'): found.append((runtime,d))
+          if not found: sys.exit('Requested iOS runtime not installed: '+os.environ['REQUESTED_RUNTIME'])
+          exact=[d for _,d in found if d['name']==os.environ['REQUESTED_DEVICE']]
+          device=exact[0] if exact else sorted((d for _,d in found),key=lambda x:x['name'])[-1]
+          if not exact: print('Requested model unavailable; fallback: '+device['name'])
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
+              out.write('udid='+device['udid']+'\nname='+device['name']+'\n')
+          print('Selected '+device['name']+' ('+device['udid']+')')
+          PY
+          xcrun simctl boot "${{ steps.sim.outputs.udid }}"
+          xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
+      - name: Build and run tests without signing
+        env:
+          NSUnbufferedIO: YES
+        run: |
+          set -euo pipefail
+          mkdir -p build/agent-preview
+          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$DERIVED_DATA" -resultBundlePath build/agent-preview/Test.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/agent-preview/xcodebuild.log
+      - name: Install, launch and capture evidence
+        if: success()
+        run: |
+          set -euo pipefail
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
+          test -f "$APP/Assets.car"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "$BUNDLE_ID"
+          xcrun simctl install "${{ steps.sim.outputs.udid }}" "$APP"
+          xcrun simctl launch "${{ steps.sim.outputs.udid }}" "$BUNDLE_ID"
+          sleep 4
+          xcrun simctl io "${{ steps.sim.outputs.udid }}" screenshot build/agent-preview/launch.png
+          xcrun simctl spawn "${{ steps.sim.outputs.udid }}" log show --last 2m --style compact \
+            --predicate "process == '${SCHEME}'" > build/agent-preview/app.log 2>&1 || true
+      - name: Capture accessibility tree with XcodeBuildMCP
+        if: success()
+        continue-on-error: true
+        run: |
+          npx --yes xcodebuildmcp@2.7.0 ui-automation snapshot-ui \
+            --simulator-id "${{ steps.sim.outputs.udid }}" --output json \
+            > build/agent-preview/ui-tree.json
+      - name: Start authenticated browser session
+        if: ${{ success() && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
+        uses: actions/checkout@v4
+        with:
+          repository: wenjinliuu/ios-ci-workflows
+          ref: ${{ inputs.ci_revision }}
+          path: .ci-workflows
+          persist-credentials: false
+      - name: Run authenticated browser session
+        if: ${{ success() && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
+        env:
+          PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
+          PREVIEW_MINS: ${{ inputs.preview_minutes }}
+        run: |
+          set -euo pipefail
+          test -n "$PREVIEW_PASSWORD" || { echo 'Set AGENT_PREVIEW_PASSWORD in this App repository before enabling live preview'; exit 1; }
+          test "$PREVIEW_MINS" -ge 1 && test "$PREVIEW_MINS" -le 20
+          uname -m | grep -q arm64
+          npm install --no-save --no-audit --no-fund serve-sim@0.1.46 http-proxy@1.18.1
+          ./node_modules/.bin/serve-sim "${{ steps.sim.outputs.name }}" --host 127.0.0.1 --port 3200 \
+            > build/agent-preview/serve-sim.log 2>&1 &
+          echo $! > build/agent-preview/serve-sim.pid
+          for i in {1..30}; do curl -fsS http://127.0.0.1:3200/ >/dev/null && break || sleep 2; done
+          curl -fsS http://127.0.0.1:3200/ >/dev/null
+          cp "$GITHUB_WORKSPACE/.ci-workflows/scripts/preview-proxy.cjs" "$RUNNER_TEMP/preview-proxy.cjs"
+          NODE_PATH="$PWD/node_modules" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" node "$RUNNER_TEMP/preview-proxy.cjs" \
+            > build/agent-preview/proxy.log 2>&1 &
+          curl -fsS http://127.0.0.1:3210/ >/dev/null
+          curl -fLsS https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-darwin-arm64.tgz \
+            -o "$RUNNER_TEMP/cloudflared.tgz"
+          echo '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095  '"$RUNNER_TEMP/cloudflared.tgz" | shasum -a 256 -c -
+          tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C "$RUNNER_TEMP" cloudflared
+          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
+            > build/agent-preview/tunnel.log 2>&1 &
+          for i in {1..40}; do
+            URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' build/agent-preview/tunnel.log | head -1 || true)
+            if [ -n "$URL" ]; then break; fi
+            sleep 2
+          done
+          test -n "$URL"
+          echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "Open: $URL (password: repository secret AGENT_PREVIEW_PASSWORD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expires when this job ends, within $PREVIEW_MINS minutes." >> "$GITHUB_STEP_SUMMARY"
+          sleep "$((PREVIEW_MINS*60))"
+      - name: Upload screenshot, UI tree, test result and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-preview-${{ github.run_number }}
+          path: ${{ inputs.workdir }}/build/agent-preview
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload XCTest result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-preview-xcresult-${{ github.run_number }}
+          path: ${{ inputs.workdir }}/build/agent-preview/Test.xcresult
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,89 @@
+name: Reusable App Icon
+
+on:
+  workflow_call:
+    inputs:
+      workdir: {type: string, required: true}
+      project: {type: string, required: true}
+      scheme: {type: string, required: true}
+      icon_path: {type: string, required: true}
+      sync_command: {type: string, required: true}
+      generate_command: {type: string, required: true}
+
+permissions:
+  contents: read
+
+jobs:
+  native-validation:
+    runs-on: macos-26
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    env:
+      PROJECT: ${{ inputs.project }}
+      SCHEME: ${{ inputs.scheme }}
+      ICON_PATH: ${{ inputs.icon_path }}
+      SYNC_COMMAND: ${{ inputs.sync_command }}
+      GENERATE_COMMAND: ${{ inputs.generate_command }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+      - name: Generate project and sync icon
+        run: |
+          set -euo pipefail
+          if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then brew install xcodegen; fi
+          bash -e -c "$SYNC_COMMAND"
+          bash -e -c "$GENERATE_COMMAND"
+          test -f "$ICON_PATH/icon.json"
+      - name: Validate icon in unsigned archive
+        run: |
+          set -euo pipefail
+          mkdir -p build/app-icon
+          xcodebuild archive -project "$PROJECT" -scheme "$SCHEME" \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "build/app-icon/${SCHEME}.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            2>&1 | tee build/app-icon/native-build.log
+          APP_PATH=$(find "build/app-icon/${SCHEME}.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -type d -print -quit)
+          test -n "$APP_PATH" && test -f "$APP_PATH/Assets.car"
+          find "$APP_PATH" -maxdepth 1 -type f -name 'AppIcon*.png' -print -quit | grep -q .
+          if grep -Eiq 'app icon.*(conflict|error)|failed to generate flattened icon' build/app-icon/native-build.log; then exit 1; fi
+  preview:
+    runs-on: macos-26
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    env:
+      ICON_PATH: ${{ inputs.icon_path }}
+      SYNC_COMMAND: ${{ inputs.sync_command }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Render optional icon previews
+        continue-on-error: true
+        run: |
+          bash -e -c "$SYNC_COMMAND"
+          mkdir -p build/app-icon
+          cp -R "$ICON_PATH" build/app-icon/AppIcon.icon
+          npx -y -p icon-composer-mcp@1.1.0 icon-composer inspect "$ICON_PATH"
+          for rendition in Default Dark TintedLight TintedDark ClearLight ClearDark; do
+            npx -y -p icon-composer-mcp@1.1.0 icon-composer render "$ICON_PATH" \
+              "build/app-icon/${rendition}.png" --platform iOS --rendition "$rendition" --width 1024 --height 1024 || true
+          done
+          npx -y -p icon-composer-mcp@1.1.0 icon-composer export-marketing \
+            "$ICON_PATH" build/app-icon/Marketing-1024.png --size 1024 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: app-icon-${{ github.sha }}
+          path: ${{ inputs.workdir }}/build/app-icon
+          if-no-files-found: warn

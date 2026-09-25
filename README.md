@@ -54,12 +54,16 @@
   app-icon.yml             # 图标：同步 → 不签名 archive 校验 → 渲染 6 种外观预览
   agent-preview.yml        # 编译测试 + 模拟器截图/UI 树/日志 + 可选实时预览 + 可选 App Store 截图
   testflight-release.yml   # 校验注册 → 不签名 archive → entitlements → 导出签名上传 TestFlight
+  cloudbase-deploy.yml     # 可复用：CloudBase CLI 部署云函数 / 静态托管
+  cloudbase-mcp-gateway-deploy.yml  # 可复用：部署 CloudBase MCP 网关到 Cloudflare Workers
+  cloudbase-mcp-gateway.yml         # 本仓库自检：网关代码类型检查 / lint / 打包
 scripts/
   preview-proxy.cjs        # 实时预览的密码网关（只转发画面与触控，屏蔽 shell 接口）
   check-public-preview.cjs # 校验公网地址：登录、JPEG 画面帧、HID WebSocket、shell 接口不可访问
 cloudbase-mcp-gateway/     # 可选：让 AI 通过 OAuth 安全连接腾讯云开发官方 Hosted MCP 的 Cloudflare Worker
 docs/
   named-preview.md         # 固定域名（Named Tunnel）实时预览的详细配置
+  cloudbase.md             # 腾讯云开发：官方 MCP 三种接法、CLI、部署工作流、凭据总表
   images/                  # README 中的流程图
 LICENSE                    # MIT
 THIRD_PARTY_NOTICES.md     # 第三方代码、运行时工具与参考项目
@@ -355,7 +359,7 @@ jobs:
 | `AGENT_PREVIEW_PASSWORD` | Secret | 实时预览 | 开启 `live_preview` | 自己生成，≥12 位，每个 App 不同 |
 | `AGENT_PREVIEW_TUNNEL_TOKEN` | Secret | 实时预览 | 仅固定域名预览 | Cloudflare Tunnel token |
 | `AGENT_PREVIEW_URL` | **Variable** | 实时预览 | 仅固定域名预览（与上一项成对） | 如 `https://myapp-preview.example.com` |
-| CloudBase CLI 凭据 | Secret | 后端部署 | 仅当 App 自己加了 CLI 部署工作流 | 腾讯云 API 密钥（见下文） |
+| `CLOUDBASE_API_KEY` | Secret | CloudBase 部署 | 仅当 App 调用 `cloudbase-deploy.yml` | 云开发控制台 → 环境 → API Key 管理 |
 
 > `dry_run=true` 的 TestFlight 运行需要声明的 Secret 名存在，但不会使用它们。
 > `GITHUB_TOKEN` 由 GitHub 自动提供，无需配置。
@@ -391,7 +395,7 @@ jobs:
 
 ### C. AI 连接后端：CloudBase MCP 网关（可选）
 
-代码在 [`cloudbase-mcp-gateway/`](cloudbase-mcp-gateway/)，完整部署步骤见其 [README](cloudbase-mcp-gateway/README.md)。
+代码在 [`cloudbase-mcp-gateway/`](cloudbase-mcp-gateway/)，可以本地 `wrangler deploy`，也可以用可复用工作流 `cloudbase-mcp-gateway-deploy.yml` 从手机触发部署。完整步骤见 [docs/cloudbase.md](docs/cloudbase.md)。
 
 ```text
 AI 客户端 ──OAuth（GitHub 登录，仅允许一个账号）──▶ Cloudflare Worker ──▶ 腾讯云开发官方 Hosted MCP ──▶ CloudBase 环境
@@ -410,22 +414,29 @@ CloudBase API Key 只保存在 Worker 里，由网关在服务端换取官方 MC
 
 ## 后端（可选）：CloudBase + MCP
 
-App 需要后端时使用腾讯云开发 CloudBase（数据库、云函数、云存储、静态托管、日志、身份认证）。有两种操作后端的方式，都不属于本仓库的可复用工作流：
+App 需要后端时使用腾讯云开发 CloudBase（数据库、云函数、云存储、静态托管、日志、身份认证）。本仓库包含全部接入所需内容，**完整说明见 [docs/cloudbase.md](docs/cloudbase.md)**：
 
-**1. AI 直接操作（推荐日常使用）**：AI 助手 → [CloudBase MCP 网关](#c-ai-连接后端cloudbase-mcp-网关可选) → 官方 Hosted MCP。适合查数据、改集合、部署单个云函数、看日志等交互式操作。
+| 需求 | 用什么 |
+| --- | --- |
+| 手机上的 AI 直接查数据、改集合、部署函数、看日志 | 官方 Hosted MCP + 本仓库 [MCP 网关](#c-ai-连接后端cloudbase-mcp-网关可选) |
+| 电脑 IDE（Claude Code / Cursor）里的 AI 操作后端 | 直连官方 Hosted MCP（OAuth，无需部署） |
+| 推送代码后自动部署云函数 / 静态网站 | 可复用工作流 `cloudbase-deploy.yml`（CloudBase CLI `tcb`） |
 
-**2. CloudBase CLI（`@cloudbase/cli`，命令 `tcb`，适合脚本化 / CI 部署）**
+一个 **环境 API Key**（云开发控制台 → API Key 管理）就能同时用于 MCP 网关和 CLI 登录（`tcb login --cloudbase-api-key <key> -e <envId>`）。App 仓库调用示例：
 
-```bash
-npm i -g @cloudbase/cli
-tcb login --apiKeyId "$TCB_SECRET_ID" --apiKey "$TCB_SECRET_KEY"   # 腾讯云 API 密钥（CAM）
-tcb fn deploy <函数名> -e "$TCB_ENV_ID"                            # 部署云函数
-tcb hosting deploy ./dist -e "$TCB_ENV_ID"                         # 部署静态网站
+```yaml
+jobs:
+  deploy:
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/cloudbase-deploy.yml@<SHA>
+    with:
+      env_id: your-env-id
+      functions: all            # 或空格分隔的函数名
+      hosting_source: web/dist  # 可选
+    secrets:
+      CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
 ```
 
-如果某个 App 想在 GitHub Actions 里自动部署后端，可以在该 App 仓库自己加一个 Ubuntu job 执行上述命令，并把 `TCB_SECRET_ID`、`TCB_SECRET_KEY`、`TCB_ENV_ID` 存为该仓库的 Secrets（名称可自定），密钥建议用只授权 CloudBase 的 CAM 子账号。目前三个 App 都没有 CLI 部署工作流。
-
-> 注意区分两种密钥：CLI 用的是腾讯云 CAM 的 SecretId/SecretKey；MCP 网关用的是云开发控制台里的环境 API Key。
+目前三个 App 都还没有接入 CLI 部署工作流。
 
 ---
 

@@ -1,0 +1,103 @@
+name: Reusable CloudBase Deploy
+
+on:
+  workflow_call:
+    inputs:
+      env_id:
+        description: CloudBase environment ID
+        type: string
+        required: true
+      workdir:
+        description: Directory containing cloudbaserc.json / the function folders
+        type: string
+        default: .
+      functions:
+        description: Space-separated cloud function names, or "all" for every function in cloudbaserc.json; empty skips
+        type: string
+        default: ''
+      functions_dir:
+        description: Folder that contains one sub-folder per function (passed to --dir as <functions_dir>/<name>); empty uses cloudbaserc.json
+        type: string
+        default: ''
+      hosting_source:
+        description: Local folder of pre-built static files to upload to static hosting; empty skips
+        type: string
+        default: ''
+      hosting_target:
+        description: Target path in static hosting (empty = root)
+        type: string
+        default: ''
+      cli_version:
+        type: string
+        default: 3.8.4
+    secrets:
+      CLOUDBASE_API_KEY:
+        description: Environment API Key from the CloudBase console
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ${{ inputs.workdir }}
+        shell: bash
+    env:
+      ENV_ID: ${{ inputs.env_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install CloudBase CLI
+        env:
+          CLI_VERSION: ${{ inputs.cli_version }}
+        run: |
+          npm install --global --no-audit --no-fund "@cloudbase/cli@${CLI_VERSION}"
+          tcb --version
+      - name: Log in with environment API Key
+        env:
+          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDBASE_API_KEY" || { echo 'Set the CLOUDBASE_API_KEY secret in the calling repository'; exit 1; }
+          tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$ENV_ID"
+      - name: Deploy cloud functions
+        if: ${{ inputs.functions != '' }}
+        env:
+          FUNCTIONS: ${{ inputs.functions }}
+          FUNCTIONS_DIR: ${{ inputs.functions_dir }}
+        run: |
+          set -euo pipefail
+          if [ "$FUNCTIONS" = all ]; then
+            tcb fn deploy --all --force -e "$ENV_ID"
+            exit 0
+          fi
+          for name in $FUNCTIONS; do
+            [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid function name: $name"; exit 1; }
+            args=("$name" --force -e "$ENV_ID")
+            if [ -n "$FUNCTIONS_DIR" ]; then args+=(--dir "$FUNCTIONS_DIR/$name"); fi
+            tcb fn deploy "${args[@]}"
+          done
+      - name: Deploy static hosting
+        if: ${{ inputs.hosting_source != '' }}
+        env:
+          HOSTING_SOURCE: ${{ inputs.hosting_source }}
+          HOSTING_TARGET: ${{ inputs.hosting_target }}
+        run: |
+          set -euo pipefail
+          test -d "$HOSTING_SOURCE"
+          if [ -n "$HOSTING_TARGET" ]; then
+            tcb hosting deploy "$HOSTING_SOURCE" "$HOSTING_TARGET" -e "$ENV_ID"
+          else
+            tcb hosting deploy "$HOSTING_SOURCE" -e "$ENV_ID"
+          fi
+      - name: Log out
+        if: always()
+        run: tcb logout || true

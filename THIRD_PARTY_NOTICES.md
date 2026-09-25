@@ -54,6 +54,8 @@ SOFTWARE.
 | [PyJWT](https://github.com/jpadilla/pyjwt) | pip 最新 | MIT | `testflight-release.yml` verify job：供 App 的注册校验脚本签发 App Store Connect JWT |
 | [@cloudflare/workers-oauth-provider](https://github.com/cloudflare/workers-oauth-provider) | ^0.8.3 | MIT | `cloudbase-mcp-gateway`：OAuth 2.1 服务端（npm 依赖） |
 | [Hono](https://github.com/honojs/hono) | ^4.13.8 | MIT | `cloudbase-mcp-gateway`：路由（npm 依赖） |
+| [CloudBase CLI](https://www.npmjs.com/package/@cloudbase/cli)（`@cloudbase/cli`） | 3.8.4 | ISC | `cloudbase-deploy.yml`：部署云函数与静态托管 |
+| [Wrangler](https://github.com/cloudflare/workers-sdk)（`wrangler`） | ^4.135.0 | MIT OR Apache-2.0 | `cloudbase-mcp-gateway`：类型生成、打包、部署（npm 开发依赖） |
 | [Octokit](https://github.com/octokit/octokit.js) | ^5.0.5 | MIT | `cloudbase-mcp-gateway`：读取 GitHub 登录用户（npm 依赖） |
 
 ## 3. 设计参考（未复制代码）
@@ -62,4 +64,4 @@ SOFTWARE.
 | --- | --- | --- |
 | [native-sim](https://github.com/bidah/native-sim) | MIT（package.json 声明） | 整体思路：GitHub → macOS runner → iOS Simulator → serve-sim → 鉴权网关 → Cloudflare Quick Tunnel → 浏览器。本仓库的 `preview-proxy.cjs`（密码登录 + 接口白名单 + 屏蔽 shell）、`check-public-preview.cjs` 和工作流步骤为针对原生 Swift/Xcode 项目独立实现 |
 | [Maestro](https://github.com/mobile-dev-inc/Maestro) | Apache-2.0 | Agent 驱动 UI 自动化（点击/滑动/断言）和 E2E 测试思路。目前未作为依赖使用，UI 检查以 XCTest + XcodeBuildMCP 为主 |
-| [Tencent CloudBase Hosted MCP](https://docs.cloudbase.net/) | — | `cloudbase-mcp-gateway` 调用的腾讯云官方 MCP 服务及其 OAuth 接口 |
+| [CloudBase AI Toolkit / CloudBase MCP](https://github.com/TencentCloudBase/CloudBase-AI-Toolkit) | MIT | `cloudbase-mcp-gateway` 代理的腾讯云官方 Hosted MCP 服务及其 OAuth 接口；未复制代码 |

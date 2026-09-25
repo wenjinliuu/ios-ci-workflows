@@ -62,6 +62,14 @@ https://<worker 名>.<你的子域>.workers.dev/mcp
 
 在 AI 客户端中把它添加为远程 MCP 连接器（例如 ChatGPT 的自定义连接器、Claude 的自定义 Connector），首次使用会跳到 GitHub 登录并授权。
 
+### 用 GitHub Actions 部署（只有手机时）
+
+中央仓库提供可复用工作流 `.github/workflows/cloudbase-mcp-gateway-deploy.yml`：在你的私有仓库放一个很薄的入口，所有 Secret（包括 `CLOUDFLARE_API_TOKEN`）只存在那个私有仓库，手动触发即可部署并自动自检。调用示例见 [docs/cloudbase.md](../docs/cloudbase.md#方式二github-actions适合只有手机时)。
+
+## 其他接法
+
+电脑上的 IDE 可以不经过网关、直接连接官方 Hosted MCP；需要本地文件能力时用 `npx @cloudbase/cloudbase-mcp`。三种接法的对比见 [docs/cloudbase.md](../docs/cloudbase.md#2-让-ai-操作后端官方-mcp-的三种接法)。
+
 ## 端点
 
 | 路径 | 作用 |

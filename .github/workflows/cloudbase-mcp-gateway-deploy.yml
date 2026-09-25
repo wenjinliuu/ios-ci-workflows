@@ -1,0 +1,130 @@
+name: Reusable CloudBase MCP Gateway Deploy
+
+on:
+  workflow_call:
+    inputs:
+      ci_revision:
+        description: Commit of wenjinliuu/ios-ci-workflows whose cloudbase-mcp-gateway is deployed; match the uses @ SHA
+        type: string
+        required: true
+      worker_name:
+        type: string
+        default: cloudbase-mcp-gateway
+      cloudbase_env_id:
+        type: string
+        required: true
+      github_client_id:
+        type: string
+        required: true
+      allowed_github_login:
+        type: string
+        required: true
+      kv_namespace_id:
+        type: string
+        required: true
+      public_url:
+        description: Deployed origin, e.g. https://cloudbase-mcp-gateway.example.workers.dev, for the post-deploy check
+        type: string
+        default: ''
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+      CLOUDBASE_API_KEY:
+        required: false
+      GITHUB_CLIENT_SECRET:
+        required: false
+      COOKIE_ENCRYPTION_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .ci-workflows/cloudbase-mcp-gateway
+        shell: bash
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: wenjinliuu/ios-ci-workflows
+          ref: ${{ inputs.ci_revision }}
+          path: .ci-workflows
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Write deployment config
+        env:
+          WORKER_NAME: ${{ inputs.worker_name }}
+          CLOUDBASE_ENV_ID: ${{ inputs.cloudbase_env_id }}
+          GITHUB_CLIENT_ID: ${{ inputs.github_client_id }}
+          ALLOWED_GITHUB_LOGIN: ${{ inputs.allowed_github_login }}
+          KV_NAMESPACE_ID: ${{ inputs.kv_namespace_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re
+          with open('wrangler.jsonc') as source:
+              config = json.loads(re.sub(r'(?m)^\s*//.*$', '', source.read()))
+          config.pop('$schema', None)
+          config['name'] = os.environ['WORKER_NAME']
+          config['vars'] = {key: os.environ[key] for key in ('CLOUDBASE_ENV_ID', 'GITHUB_CLIENT_ID', 'ALLOWED_GITHUB_LOGIN')}
+          config['kv_namespaces'][0]['id'] = os.environ['KV_NAMESPACE_ID']
+          for key, value in [('name', config['name']), *config['vars'].items(), ('kv', os.environ['KV_NAMESPACE_ID'])]:
+              assert value and not value.startswith('your-'), 'Set a real value for ' + key
+          with open('wrangler.deploy.json', 'w') as out:
+              json.dump(config, out, indent=2)
+          PY
+          npx wrangler types --config wrangler.deploy.json
+          npx tsc --noEmit
+      - name: Upload Worker secrets
+        env:
+          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          COOKIE_ENCRYPTION_KEY: ${{ secrets.COOKIE_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          SECRETS_FILE="$RUNNER_TEMP/gateway-secrets.json"
+          umask 077
+          python3 - "$SECRETS_FILE" <<'PY'
+          import json, os, sys
+          names = ('CLOUDBASE_API_KEY', 'GITHUB_CLIENT_SECRET', 'COOKIE_ENCRYPTION_KEY')
+          values = {name: os.environ[name] for name in names if os.environ.get(name)}
+          with open(sys.argv[1], 'w') as out:
+              json.dump(values, out)
+          print('Updating Worker secrets: ' + (', '.join(values) or 'none (keeping existing values)'))
+          PY
+          if [ "$(cat "$SECRETS_FILE")" != '{}' ]; then
+            npx wrangler secret bulk "$SECRETS_FILE" --config wrangler.deploy.json
+          fi
+          rm -f "$SECRETS_FILE"
+      - name: Deploy Worker
+        run: npx wrangler deploy --config wrangler.deploy.json
+      - name: Check deployed gateway
+        if: ${{ inputs.public_url != '' }}
+        env:
+          PUBLIC_URL: ${{ inputs.public_url }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLIC_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]
+          for attempt in {1..12}; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$PUBLIC_URL/.well-known/oauth-authorization-server" || true)
+            [ "$code" = 200 ] && break
+            sleep 5
+          done
+          test "$code" = 200
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' "$PUBLIC_URL/mcp")
+          test "$code" = 401
+          echo "OAuth metadata published and /mcp rejects unauthenticated requests"

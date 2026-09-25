@@ -301,6 +301,7 @@ jobs:
           echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"
           echo "Open: $URL (password: repository secret AGENT_PREVIEW_PASSWORD)" >> "$GITHUB_STEP_SUMMARY"
           echo "Expires when this job ends, within $PREVIEW_MINS minutes." >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Authenticated Agent Preview::Open $URL while this job is running; use the repository preview password."
           sleep "$((PREVIEW_MINS*60))"
       - name: Upload screenshot, UI tree, test result and logs
         if: always()

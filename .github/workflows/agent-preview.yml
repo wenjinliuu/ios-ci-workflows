@@ -233,7 +233,8 @@ jobs:
               try:
                   with get('/helper/stream.mjpeg?raw=1') as response:
                       assert response.status == 200
-                      assert response.read(2) == b'\xff\xd8', 'No JPEG frame received'
+                      # serve-sim prefixes even raw JPEG frames with a MIME frame header.
+                      assert b'\xff\xd8' in response.read(4096), 'No JPEG frame received'
                   break
               except (OSError, AssertionError):
                   if attempt == 2: raise

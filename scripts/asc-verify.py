@@ -9,7 +9,8 @@
   任何一项缺失都以非零退出，让 TestFlight 在归档之前就失败，而不是等到导出签名。
 - 再设置 ICLOUD_CONTAINER 时，从这个 Bundle ID 现有的描述文件里读出 App ID 实际勾选的
   iCloud 容器，把 `icloud=true|false` 写进 GITHUB_OUTPUT：容器确实在才给包加 iCloud 权限，
-  不在（或还没有描述文件可查）就跳过并给出警告，App 里的备份自动落到本机。
+  不在（Bundle ID 没开 iCloud、没勾这个容器，或还没有描述文件可查）就跳过并给出警告，
+  App 里的备份自动落到本机。
 
 依赖：pip install 'pyjwt[crypto]'
 """
@@ -119,10 +120,12 @@ def main() -> int:
 
     container = os.environ.get("ICLOUD_CONTAINER", "").strip()
     if container and bundle is not None:
-        found = icloud_containers(bundle["id"], auth)
+        found = icloud_containers(bundle["id"], auth) if "ICLOUD" in names else set()
         enabled = container in found
         if enabled:
             print(f"  iCloud 容器 {container} 已勾选在 App ID 上")
+        elif "ICLOUD" not in names:
+            print(f"::warning::Bundle ID {expected} 没有开启 iCloud 能力；这次不加 iCloud 权限")
         elif found:
             print(f"::warning::App ID {expected} 勾选的 iCloud 容器是 {sorted(found)}，不含 {container}；这次不加 iCloud 权限")
         else:

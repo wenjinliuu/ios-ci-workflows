@@ -129,7 +129,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 
 建议只在 **手动触发** 或推送 **`v*` 标签** 时调用。
 
-1. **verify**（Ubuntu，省 macOS 时长）：不是 dry run 时，用本仓库的 `scripts/asc-verify.py` 通过 App Store Connect API 核对 Bundle ID 已注册、App 已创建；设置了 `icloud_container` 时还要求 Bundle ID 开启 iCloud，并读出 App ID 实际勾选的容器。缺任何一项都在打包前失败，而不是等到签名
+1. **verify**（Ubuntu，省 macOS 时长）：不是 dry run 时，用本仓库的 `scripts/asc-verify.py` 通过 App Store Connect API 核对 Bundle ID 已注册、App 已创建；Bundle ID 或 App 缺失都在打包前失败，而不是等到签名。设置了 `icloud_container` 时还会读出 App ID 实际勾选的 iCloud 容器，供 `icloud-verified` 模式决定是否嵌入 iCloud 权限
 2. **release**（macOS）：
    - 同步图标、生成工程（注入 `DEVELOPMENT_TEAM`）
    - 生成版本号：build number 默认用 `GITHUB_RUN_NUMBER`；可指定 `marketing_version`
@@ -164,7 +164,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 | `APP_STORE_CONNECT_ISSUER_ID` | API Key 的 Issuer ID |
 | `APP_STORE_CONNECT_PRIVATE_KEY` | `.p8` 文件的 **完整文本内容**（含 `-----BEGIN PRIVATE KEY-----` 首尾行） |
 
-`icloud-verified` 模式依赖 verify 的结果：只有 App ID 上确实勾选了 `icloud_container`，才把 iCloud 权限嵌入包内；还没有描述文件可查时（首次发布）会跳过并给出警告。
+用了 iCloud 的 App 统一使用 `entitlement_mode: icloud-verified` 并填写 `icloud_container`（缺少容器会直接报错）。只有 Bundle ID 开启了 iCloud 能力、App ID 上确实勾选了该容器时，才把 iCloud 权限嵌入包内；否则（包括首次发布还没有描述文件可查）跳过 iCloud 权限并给出警告，照常上传，App 应把数据退回存到本机。
 
 ---
 

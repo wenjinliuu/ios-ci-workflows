@@ -1,0 +1,29 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// Worker name becomes https://<name>.<account-subdomain>.workers.dev
+	"name": "cloudbase-mcp-gateway",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-18",
+	"compatibility_flags": ["nodejs_compat"],
+	"preview_urls": false,
+	"keep_vars": true,
+	"vars": {
+		// Replace all three before deploying. None of them is a secret.
+		"CLOUDBASE_ENV_ID": "your-cloudbase-env-id",
+		"GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
+		"ALLOWED_GITHUB_LOGIN": "your-github-login"
+	},
+	"secrets": {
+		"required": ["GITHUB_CLIENT_SECRET", "COOKIE_ENCRYPTION_KEY", "CLOUDBASE_API_KEY"]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			// Output of: npx wrangler kv namespace create OAUTH_KV
+			"id": "your-kv-namespace-id"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}

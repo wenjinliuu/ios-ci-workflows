@@ -24,6 +24,7 @@
 - [升级中央工作流](#升级中央工作流)
 - [安全约定](#安全约定)
 - [常见问题](#常见问题)
+- [致谢与开源许可](#致谢与开源许可)
 - [完整工作流图](#完整工作流图)
 
 ---
@@ -56,9 +57,12 @@
 scripts/
   preview-proxy.cjs        # 实时预览的密码网关（只转发画面与触控，屏蔽 shell 接口）
   check-public-preview.cjs # 校验公网地址：登录、JPEG 画面帧、HID WebSocket、shell 接口不可访问
+cloudbase-mcp-gateway/     # 可选：让 AI 通过 OAuth 安全连接腾讯云开发官方 Hosted MCP 的 Cloudflare Worker
 docs/
   named-preview.md         # 固定域名（Named Tunnel）实时预览的详细配置
   images/                  # README 中的流程图
+LICENSE                    # MIT
+THIRD_PARTY_NOTICES.md     # 第三方代码、运行时工具与参考项目
 ```
 
 ## 三个可复用工作流
@@ -169,7 +173,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 - [ ] **GitHub 账号**，App 仓库开启 Actions。macOS runner 消耗较多额度，私有仓库请留意 Actions 分钟数
 - [ ] **Apple Developer Program**（付费会员，真机测试和上架必需）
 - [ ] **App Store Connect** 中已创建该 App（Bundle ID 已注册）——上传 TestFlight 前必须完成
-- [ ] **Cloudflare 账号**（免费即可）——仅在需要固定域名预览或 MCP 身份验证连接器时需要；默认的 Quick Tunnel 不需要账号
+- [ ] （可选）**Cloudflare 账号**（免费即可）——只有固定域名预览或 CloudBase MCP 网关才需要；默认的实时预览（Quick Tunnel）**不需要任何 Cloudflare 账号或配置**
 - [ ] （可选）**腾讯云 CloudBase** 环境——App 需要后端时
 
 ### App 仓库需要具备
@@ -351,7 +355,7 @@ jobs:
 | `AGENT_PREVIEW_PASSWORD` | Secret | 实时预览 | 开启 `live_preview` | 自己生成，≥12 位，每个 App 不同 |
 | `AGENT_PREVIEW_TUNNEL_TOKEN` | Secret | 实时预览 | 仅固定域名预览 | Cloudflare Tunnel token |
 | `AGENT_PREVIEW_URL` | **Variable** | 实时预览 | 仅固定域名预览（与上一项成对） | 如 `https://myapp-preview.example.com` |
-| CloudBase 部署密钥 | Secret | 后端部署 | App 自己的后端部署工作流 | 腾讯云 API 密钥（见下文） |
+| CloudBase CLI 凭据 | Secret | 后端部署 | 仅当 App 自己加了 CLI 部署工作流 | 腾讯云 API 密钥（见下文） |
 
 > `dry_run=true` 的 TestFlight 运行需要声明的 Secret 名存在，但不会使用它们。
 > `GITHUB_TOKEN` 由 GitHub 自动提供，无需配置。
@@ -360,13 +364,23 @@ jobs:
 
 ## Cloudflare 需要部署什么
 
+**结论：默认什么都不用部署。** 实时预览默认使用 Cloudflare 的 Quick Tunnel，它是匿名的，不需要账号、域名或 token，这也是三个 App 至今从没配置过 Cloudflare 却能在手机上看到模拟器的原因。只有下面 B、C 两种可选能力才需要 Cloudflare 账号。
+
+| 能力 | 需要 Cloudflare 账号？ | 要部署什么 |
+| --- | --- | --- |
+| A. 实时预览（默认） | 否 | 无 |
+| B. 实时预览固定域名 | 是，且需要托管在 Cloudflare 的域名 | 每个 App 一条 Tunnel + 主机名 |
+| C. AI 连接 CloudBase 后端 | 是（免费即可） | 1 个 Worker + 1 个 KV + 3 个 Worker Secrets |
+
 ### A. 实时预览：默认 Quick Tunnel（零配置）
 
-什么都不用部署。工作流下载固定版本的 `cloudflared`（校验 SHA-256），创建临时 `*.trycloudflare.com` 地址，并在公开前校验：登录成功、能拿到 JPEG 画面帧、HID WebSocket 可用、shell 接口 `/exec-ws` 返回 404。地址 DNS 迟迟无法解析时会重新申请，最多 4 次。
+链路：`serve-sim`（仅监听 `127.0.0.1:3200`）→ `preview-proxy.cjs` 密码网关（`127.0.0.1:3210`）→ `cloudflared` Quick Tunnel → 手机浏览器。
 
-### B. 实时预览：固定域名 Named Tunnel（推荐在 Quick Tunnel 不稳定时使用）
+工作流在 runner 上下载固定版本的 `cloudflared`（校验 SHA-256），创建临时 `*.trycloudflare.com` 地址。开放给你之前会通过这个公网地址自动验证：密码登录、JPEG 画面帧、HID WebSocket，以及 shell 接口 `/exec-ws` 返回 404。DNS 迟迟不能解析时会重新申请地址，最多 4 次。地址只在 job 运行期间有效，每次都不同。
 
-需要一个托管在 Cloudflare 的域名。**每个 App 一条独立的 Tunnel 和主机名**，避免同时预览时串到别的模拟器。
+### B. 实时预览：固定域名 Named Tunnel（可选）
+
+只有当 Quick Tunnel 在你的网络下经常无法解析，或者想要固定地址时才需要。需要一个托管在 Cloudflare 的域名。**每个 App 一条独立的 Tunnel 和主机名**，避免同时预览时串到别的模拟器。
 
 1. Cloudflare Dashboard → **Networking → Tunnels** → 创建远程管理（remotely managed）的 Tunnel。
 2. 添加 **Published application** 路由，例如 `myapp-preview.example.com` → Service `http://127.0.0.1:3210`，**不要**加路径限制（登录、MJPEG、WebSocket 都要能到达网关）。
@@ -375,35 +389,43 @@ jobs:
 
 两项必须同时设置，否则工作流直接报错；都不设置时自动使用 Quick Tunnel。详见 [docs/named-preview.md](docs/named-preview.md)。
 
-### C. AI 连接后端：MCP 身份验证连接器（可选，仅当使用 CloudBase MCP）
+### C. AI 连接后端：CloudBase MCP 网关（可选）
 
-手机上的 AI 助手通过远程 MCP 操作后端时，需要一个有身份验证的公网入口。当前做法是在 Cloudflare Workers 上部署一个 OAuth 连接器，把请求转发给 CloudBase MCP：
+代码在 [`cloudbase-mcp-gateway/`](cloudbase-mcp-gateway/)，完整部署步骤见其 [README](cloudbase-mcp-gateway/README.md)。
 
-| Cloudflare 资源 | 作用 |
-| --- | --- |
-| Worker（例如 `cloudbase-mcp-direct-v2`） | 对外暴露 MCP 端点，做 OAuth 授权，校验后转发给 CloudBase MCP |
-| Workers KV 命名空间（例如 `*-oauth-kv`） | 存放 OAuth 客户端注册、授权码和 token |
-| Worker Secrets | 腾讯云 / CloudBase 的访问凭据、OAuth 签名密钥等，只用 `wrangler secret put` 写入，不写进代码 |
+```text
+AI 客户端 ──OAuth（GitHub 登录，仅允许一个账号）──▶ Cloudflare Worker ──▶ 腾讯云开发官方 Hosted MCP ──▶ CloudBase 环境
+```
 
-部署要点：
+| Cloudflare 资源 | 名称 | 作用 |
+| --- | --- | --- |
+| Worker | 默认 `cloudbase-mcp-gateway` | OAuth 2.1 服务端 + MCP 代理，对外地址 `https://<worker>.<子域>.workers.dev/mcp` |
+| KV 命名空间 | 绑定名 `OAUTH_KV` | OAuth 客户端注册、授权码、token、一次性 state |
+| Worker 变量 | `CLOUDBASE_ENV_ID`、`GITHUB_CLIENT_ID`、`ALLOWED_GITHUB_LOGIN` | 环境 ID、GitHub OAuth App ID、唯一允许登录的 GitHub 账号 |
+| Worker Secrets | `CLOUDBASE_API_KEY`、`GITHUB_CLIENT_SECRET`、`COOKIE_ENCRYPTION_KEY` | 用 `wrangler secret put` 写入，不进代码 |
 
-1. 用 `wrangler` 创建 KV：`wrangler kv namespace create OAUTH_KV`，把 id 写入 `wrangler.toml` 的 `kv_namespaces` 绑定。
-2. `wrangler secret put <NAME>` 写入所需凭据（腾讯云 SecretId/SecretKey、CloudBase 环境 ID、OAuth 相关密钥等，以连接器代码实际读取的名称为准）。
-3. `wrangler deploy`，得到 `https://<worker>.<subdomain>.workers.dev/`（或绑定自定义域名）。
-4. 在 AI 客户端里把该地址添加为远程 MCP 连接器，首次使用时走 OAuth 授权。
-
-> 连接器代码不在本仓库中；上表列出的是需要在 Cloudflare 上准备的资源类型。
+CloudBase API Key 只保存在 Worker 里，由网关在服务端换取官方 MCP token，AI 客户端永远拿不到它。
 
 ---
 
 ## 后端（可选）：CloudBase + MCP
 
-App 需要后端时使用腾讯云开发 CloudBase（数据库、云函数、网关、日志、静态托管、身份认证）。分两条链路：
+App 需要后端时使用腾讯云开发 CloudBase（数据库、云函数、云存储、静态托管、日志、身份认证）。有两种操作后端的方式，都不属于本仓库的可复用工作流：
 
-- **部署（自动）**：App 仓库里自己的 GitHub Actions 在代码推送后调用 CloudBase CLI，例如 `tcb fn deploy`、`tcb hosting deploy`。在 App 仓库添加腾讯云 API 密钥（如 `TCB_SECRET_ID`、`TCB_SECRET_KEY`）和环境 ID（如 `TCB_ENV_ID`）作为 Secrets，用 `tcb login --apiKeyId ... --apiKey ...` 登录。建议使用只授予 CloudBase 权限的子账号密钥。
-- **AI 操作（安全连接）**：AI 助手 → Cloudflare 身份验证连接器 → 腾讯官方 CloudBase MCP，见上一节 C。
+**1. AI 直接操作（推荐日常使用）**：AI 助手 → [CloudBase MCP 网关](#c-ai-连接后端cloudbase-mcp-网关可选) → 官方 Hosted MCP。适合查数据、改集合、部署单个云函数、看日志等交互式操作。
 
-这部分不属于本仓库的可复用工作流，由各 App 按需自行配置。
+**2. CloudBase CLI（`@cloudbase/cli`，命令 `tcb`，适合脚本化 / CI 部署）**
+
+```bash
+npm i -g @cloudbase/cli
+tcb login --apiKeyId "$TCB_SECRET_ID" --apiKey "$TCB_SECRET_KEY"   # 腾讯云 API 密钥（CAM）
+tcb fn deploy <函数名> -e "$TCB_ENV_ID"                            # 部署云函数
+tcb hosting deploy ./dist -e "$TCB_ENV_ID"                         # 部署静态网站
+```
+
+如果某个 App 想在 GitHub Actions 里自动部署后端，可以在该 App 仓库自己加一个 Ubuntu job 执行上述命令，并把 `TCB_SECRET_ID`、`TCB_SECRET_KEY`、`TCB_ENV_ID` 存为该仓库的 Secrets（名称可自定），密钥建议用只授权 CloudBase 的 CAM 子账号。目前三个 App 都没有 CLI 部署工作流。
+
+> 注意区分两种密钥：CLI 用的是腾讯云 CAM 的 SecretId/SecretKey；MCP 网关用的是云开发控制台里的环境 API Key。
 
 ---
 
@@ -446,7 +468,7 @@ App 仓库没有配置该 Secret，或入口文件没有把它传给可复用工
 只有 `workflow_dispatch` 手动触发且 `live_preview=true` 时才会启动，push/PR 不会。
 
 **预览地址打不开**
-job 结束后地址即失效；请在 job 仍在运行时打开。Quick Tunnel 反复 DNS 失败时改用 [固定域名 Named Tunnel](#b-实时预览固定域名-named-tunnel推荐在-quick-tunnel-不稳定时使用)。
+job 结束后地址即失效；请在 job 仍在运行时打开。Quick Tunnel 反复 DNS 失败时改用 [固定域名 Named Tunnel](#b-实时预览固定域名-named-tunnel可选)。
 
 **`Set both AGENT_PREVIEW_URL variable and AGENT_PREVIEW_TUNNEL_TOKEN secret`**
 固定域名的两项必须同时配置，或同时删除以回到 Quick Tunnel。
@@ -462,6 +484,26 @@ runner 镜像上没有该 iOS 版本，改用已安装的 `ios_runtime`。
 
 **build number 冲突**
 默认使用 `GITHUB_RUN_NUMBER`；如果之前上传过更大的号，手动运行时指定 `build_number`。
+
+---
+
+## 致谢与开源许可
+
+本仓库以 [MIT License](LICENSE) 开源。
+
+CI 中直接运行的开源工具（固定版本，运行时下载，不包含在本仓库中）：
+
+- [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)（MIT）：Simulator 无障碍 UI 树
+- [serve-sim](https://github.com/EvanBacon/serve-sim)（Apache-2.0）：Simulator 画面串流与 HID 触控
+- [icon-composer-mcp](https://github.com/ethbak/icon-composer-mcp)（MIT）：`.icon` Liquid Glass 图标 6 种外观渲染
+- [cloudflared](https://github.com/cloudflare/cloudflared)（Apache-2.0）：实时预览隧道
+
+设计参考（未复制代码）：
+
+- [native-sim](https://github.com/bidah/native-sim)：GitHub → macOS runner → Simulator → serve-sim → 鉴权网关 → Cloudflare Tunnel → 浏览器 的整体思路；本仓库针对原生 Swift/Xcode 项目独立实现了密码网关、接口白名单、shell 隔离和公网自检
+- [Maestro](https://github.com/mobile-dev-inc/Maestro)：Agent 驱动 UI 自动化与 E2E 测试思路，目前未作为依赖使用
+
+包含的第三方代码：`cloudbase-mcp-gateway/` 中的 OAuth 辅助文件来自 Cloudflare 的 [remote-mcp-github-oauth](https://github.com/cloudflare/ai/tree/main/demos/remote-mcp-github-oauth) 示例（MIT）。完整清单与许可文本见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---
 

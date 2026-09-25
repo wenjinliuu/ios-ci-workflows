@@ -1,0 +1,31 @@
+name: CloudBase MCP Gateway check
+
+on:
+  push:
+    branches: [main]
+    paths: ['cloudbase-mcp-gateway/**', '.github/workflows/cloudbase-mcp-gateway.yml']
+  pull_request:
+    paths: ['cloudbase-mcp-gateway/**', '.github/workflows/cloudbase-mcp-gateway.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudbase-mcp-gateway
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm run type-check
+      - run: npx oxlint
+      - name: Bundle without deploying
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/gateway-bundle"

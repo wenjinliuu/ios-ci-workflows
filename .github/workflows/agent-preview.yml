@@ -199,6 +199,10 @@ jobs:
             SIM_UDID="${{ steps.sim.outputs.udid }}" APP_SCHEME="$SCHEME" \
             SERVE_SIM_BIN="$PWD/node_modules/.bin/serve-sim" node "$RUNNER_TEMP/preview-proxy.cjs" \
             > build/agent-preview/proxy.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3210/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
           curl -fsS http://127.0.0.1:3210/ >/dev/null
           python3 - <<'PY'
           import os, time, urllib.error, urllib.parse, urllib.request

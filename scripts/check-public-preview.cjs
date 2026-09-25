@@ -61,4 +61,8 @@ async function main() {
   console.log('Cloudflare login, simulator JPEG stream, HID WebSocket and shell isolation verified');
 }
 
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => {
+  console.error('Public preview check:', error.message);
+  if (error.cause) console.error('Network cause:', error.cause.code || error.cause.message);
+  process.exitCode = 1;
+});

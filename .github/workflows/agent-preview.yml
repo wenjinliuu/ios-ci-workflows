@@ -144,7 +144,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
+          for attempt in {1..18}; do
             npx --yes xcodebuildmcp@2.7.0 ui-automation snapshot-ui \
               --simulator-id "${{ steps.sim.outputs.udid }}" --output json \
               > build/agent-preview/ui-tree.json || true
@@ -260,7 +260,7 @@ jobs:
               PUBLIC_READY=true
               break
             fi
-            sleep 4
+            sleep 5
           done
           test "$PUBLIC_READY" = true
           echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"

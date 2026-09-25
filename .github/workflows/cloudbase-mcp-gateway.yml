@@ -27,5 +27,6 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run type-check
       - run: npx oxlint
+      - run: npx oxfmt --check .
       - name: Bundle without deploying
         run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/gateway-bundle"

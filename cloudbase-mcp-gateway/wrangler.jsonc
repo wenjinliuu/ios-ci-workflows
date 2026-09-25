@@ -11,19 +11,19 @@
 		// Replace all three before deploying. None of them is a secret.
 		"CLOUDBASE_ENV_ID": "your-cloudbase-env-id",
 		"GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
-		"ALLOWED_GITHUB_LOGIN": "your-github-login"
+		"ALLOWED_GITHUB_LOGIN": "your-github-login",
 	},
 	"secrets": {
-		"required": ["GITHUB_CLIENT_SECRET", "COOKIE_ENCRYPTION_KEY", "CLOUDBASE_API_KEY"]
+		"required": ["GITHUB_CLIENT_SECRET", "COOKIE_ENCRYPTION_KEY", "CLOUDBASE_API_KEY"],
 	},
 	"kv_namespaces": [
 		{
 			"binding": "OAUTH_KV",
 			// Output of: npx wrangler kv namespace create OAUTH_KV
-			"id": "your-kv-namespace-id"
-		}
+			"id": "your-kv-namespace-id",
+		},
 	],
 	"observability": {
-		"enabled": true
-	}
+		"enabled": true,
+	},
 }

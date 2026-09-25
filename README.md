@@ -14,7 +14,7 @@
 
 - [整体思路](#整体思路)
 - [仓库内容](#仓库内容)
-- [三个可复用工作流](#三个可复用工作流)
+- [三个 iOS 可复用工作流](#三个-ios-可复用工作流)
 - [接入前准备清单](#接入前准备清单)
 - [接入步骤（App 仓库）](#接入步骤app-仓库)
 - [Secrets 与 Variables 一览](#secrets-与-variables-一览)
@@ -52,12 +52,13 @@
 ```
 .github/workflows/
   app-icon.yml             # 图标：同步 → 不签名 archive 校验 → 渲染 6 种外观预览
-  agent-preview.yml        # 编译测试 + 模拟器截图/UI 树/日志 + 可选实时预览 + 可选 App Store 截图
-  testflight-release.yml   # 校验注册 → 不签名 archive → entitlements → 导出签名上传 TestFlight
+  agent-preview.yml        # 编译测试 + 模拟器截图/UI 树/日志 + 可选实时预览
+  testflight-release.yml   # 核对注册 → 不签名 archive → entitlements → 导出签名上传 TestFlight
   cloudbase-deploy.yml     # 可复用：CloudBase CLI 部署云函数 / 静态托管
   cloudbase-mcp-gateway-deploy.yml  # 可复用：部署 CloudBase MCP 网关到 Cloudflare Workers
   cloudbase-mcp-gateway.yml         # 本仓库自检：网关代码类型检查 / lint / 打包
 scripts/
+  asc-verify.py            # TestFlight 发布前用 App Store Connect API 核对 Bundle ID、App、iCloud 容器
   preview-proxy.cjs        # 实时预览的密码网关（只转发画面与触控，屏蔽 shell 接口）
   check-public-preview.cjs # 校验公网地址：登录、JPEG 画面帧、HID WebSocket、shell 接口不可访问
 cloudbase-mcp-gateway/     # 可选：让 AI 通过 OAuth 安全连接腾讯云开发官方 Hosted MCP 的 Cloudflare Worker
@@ -69,7 +70,9 @@ LICENSE                    # MIT
 THIRD_PARTY_NOTICES.md     # 第三方代码、运行时工具与参考项目
 ```
 
-## 三个可复用工作流
+## 三个 iOS 可复用工作流
+
+> CloudBase 相关的两个可复用工作流见 [后端（可选）：CloudBase + MCP](#后端可选cloudbase--mcp)。
 
 ### 1. `app-icon.yml` — App 图标
 
@@ -105,8 +108,6 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
    预览地址会以 notice 显示在正在运行的 job 日志里，也会写入 job summary。最长 20 分钟。
 7. 上传产物 `agent-preview-<run>`（截图、UI 树、日志、xcodebuild.log）和 `agent-preview-xcresult-<run>`，保留 7 天
 
-**screenshots job**（仅手动触发 + `capture_screenshots=true` + 设置了 `screenshot_scheme`）：运行截图 UI 测试，导出附件，上传产物并强制推送到 App 仓库的 `ci/screenshots` 分支。
-
 | 输入 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `workdir` / `project` / `scheme` | ✅ | | 同上 |
@@ -118,9 +119,6 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 | `live_preview` | | `false` | 是否开启实时预览（只在 `workflow_dispatch` 下生效） |
 | `preview_minutes` | | `12` | 预览时长，1–20 分钟 |
 | `public_preview_url` | | `''` | 固定域名预览地址，一般传 `${{ vars.AGENT_PREVIEW_URL }}` |
-| `screenshot_scheme` | | `''` | 截图 UI 测试的 scheme |
-| `capture_screenshots` | | `false` | 是否运行截图 job |
-| `screenshot_device` | | `iPhone 17 Pro Max` | 截图用的机型 |
 
 | Secret | 必填 | 说明 |
 | --- | --- | --- |
@@ -131,7 +129,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 
 建议只在 **手动触发** 或推送 **`v*` 标签** 时调用。
 
-1. **verify**（Ubuntu，省 macOS 时长，可选）：设置了 `asc_verify_command` 且不是 dry run 时，用 App Store Connect API 检查 App 已注册、所需能力（iCloud）已开启
+1. **verify**（Ubuntu，省 macOS 时长）：不是 dry run 时，用本仓库的 `scripts/asc-verify.py` 通过 App Store Connect API 核对 Bundle ID 已注册、App 已创建；设置了 `icloud_container` 时还要求 Bundle ID 开启 iCloud，并读出 App ID 实际勾选的容器。缺任何一项都在打包前失败，而不是等到签名
 2. **release**（macOS）：
    - 同步图标、生成工程（注入 `DEVELOPMENT_TEAM`）
    - 生成版本号：build number 默认用 `GITHUB_RUN_NUMBER`；可指定 `marketing_version`
@@ -149,8 +147,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 | `entitlements_path` | `''` | entitlements 文件路径 |
 | `entitlement_mode` | `none` | `none` 不嵌入；`best-effort` 失败不阻塞；`icloud-verified` 只有 verify 确认 iCloud 可用时才嵌入；其他任意值 = 严格嵌入 |
 | `icloud_container` | `''` | 如 `iCloud.com.example.app`，会校验 entitlements 中存在 |
-| `asc_verify_command` | `''` | App 仓库里的校验脚本命令（见下文），为空则跳过 verify |
-| `lookup_only` | `false` | 只做注册查询，不打包 |
+| `lookup_only` | `false` | 只列出团队下全部 Bundle ID 与 App（名称、SKU、能力、iCloud 容器），不打包 |
 | `dry_run` | `false` | 只 archive 不签名不上传 |
 | `build_number` | `''` | 自定义 build number（纯数字） |
 | `marketing_version` | `''` | 版本号，如 `1.2` / `1.2.3` |
@@ -158,6 +155,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 | `expected_team_id` | `''` | 防止用错 Team 的保护校验 |
 | `inspect_icloud` | `false` | 额外导出一份本地包并输出 entitlement 报告 |
 | `artifact_prefix` | `''` | dSYM 产物名前缀 |
+| `ci_revision` | 必填 | **必须和 `uses:` 里的 SHA 一致**，verify 按这个 commit 拉取 `scripts/asc-verify.py` |
 
 | Secret（全部必填） | 说明 |
 | --- | --- |
@@ -166,7 +164,7 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 | `APP_STORE_CONNECT_ISSUER_ID` | API Key 的 Issuer ID |
 | `APP_STORE_CONNECT_PRIVATE_KEY` | `.p8` 文件的 **完整文本内容**（含 `-----BEGIN PRIVATE KEY-----` 首尾行） |
 
-`asc_verify_command` 运行时可用的环境变量：`KEY_ID`、`ISSUER_ID`、`PRIVATE_KEY`、`EXPECTED_BUNDLE_ID`、`REQUIRED_CAPABILITIES`（`ICLOUD`）、`ICLOUD_CONTAINER`；API Key 已写到 `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`，并已安装 `pyjwt[crypto]`。脚本通过非零退出码表示失败；如果确认 iCloud 可用，写 `echo "icloud=true" >> "$GITHUB_OUTPUT"`，供 `icloud-verified` 模式使用。`lookup_only=true` 时 `EXPECTED_BUNDLE_ID` 和 `REQUIRED_CAPABILITIES` 会被清空。
+`icloud-verified` 模式依赖 verify 的结果：只有 App ID 上确实勾选了 `icloud_container`，才把 iCloud 权限嵌入包内；还没有描述文件可查时（首次发布）会跳过并给出警告。
 
 ---
 
@@ -187,8 +185,6 @@ Liquid Glass 图标包含图层和材质，所以 App 仓库保留 SVG 图层素
 - [ ] 不签名也能编译（CI 用 `CODE_SIGNING_ALLOWED=NO` 构建）
 - [ ] Liquid Glass 图标包 `*.icon`（含 `icon.json`），以及把 SVG 图层同步进去的脚本（没有可以用 `true` 代替 `sync_command`）
 - [ ] 工程 Release 配置能 archive（`generic/platform=iOS`）
-- [ ] （可选）截图 UI 测试 scheme：用 `XCTAttachment` 保存截图，`lifetime = .keepAlways`
-- [ ] （可选）`asc_verify_command` 对应的注册校验脚本
 - [ ] （可选）entitlements 文件（iCloud 等能力）
 
 ### Apple 侧需要生成的东西
@@ -214,19 +210,31 @@ App 仓库 → Settings → Secrets and variables → Actions，按 [Secrets 与
 
 ### 第 3 步：添加入口工作流
 
-下面三个文件放在 App 仓库的 `.github/workflows/`。把 `MyApp`、路径、Bundle ID 等换成自己的。
+下面三个文件放在 App 仓库的 `.github/workflows/`，所有 App 使用同一套写法，只替换 `MyApp`、路径、Bundle ID 等自己的参数。三个文件里的 `<SHA>` 必须一致。
 
-**`.github/workflows/app-icon.yml`**
+**`.github/workflows/icon-preview.yml`**
 
 ```yaml
-name: App Icon
+name: App Icon Preview
+
 on:
   push:
     branches: [main]
-    paths: ['Design/AppIcon/**', 'project.yml']
+    paths:
+      - "DesignAssets/AppIcon/**"
+      - "MyApp/Resources/AppIcon.icon/**"
+      - "project.yml"
+      - "Scripts/sync-app-icon.sh"
+      - ".github/workflows/icon-preview.yml"
   workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: app-icon-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   icon:
     uses: wenjinliuu/ios-ci-workflows/.github/workflows/app-icon.yml@<SHA>
@@ -234,41 +242,46 @@ jobs:
       workdir: .
       project: MyApp.xcodeproj
       scheme: MyApp
-      icon_path: MyApp/AppIcon.icon
-      sync_command: ./scripts/sync-icon.sh
+      icon_path: MyApp/Resources/AppIcon.icon
+      sync_command: bash Scripts/sync-app-icon.sh
       generate_command: xcodegen generate
 ```
 
-**`.github/workflows/build-test.yml`**
+**`.github/workflows/ios-build.yml`**
 
 ```yaml
 name: Build & Test / Agent Preview
+
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
-      live_preview:
-        description: Open authenticated browser preview
-        type: boolean
-        default: false
-      preview_minutes:
-        description: Preview minutes (1-20)
-        type: number
-        default: 12
       simulator_name:
+        description: "iPhone simulator model"
         type: string
         default: iPhone 17 Pro
       ios_runtime:
+        description: "Installed iOS runtime (for example 26)"
         type: string
         default: '26'
-      capture_screenshots:
-        description: Run screenshot UI tests
+      live_preview:
+        description: "Open authenticated browser preview (requires AGENT_PREVIEW_PASSWORD secret)"
         type: boolean
         default: false
+      preview_minutes:
+        description: "Live preview lifetime, 1-20 minutes"
+        type: number
+        default: 12
+
 permissions:
-  contents: write   # 仅 screenshots job 推送 ci/screenshots 需要；不用截图可改为 read
+  contents: read
+
+concurrency:
+  group: agent-preview-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   preview:
     uses: wenjinliuu/ios-ci-workflows/.github/workflows/agent-preview.yml@<SHA>
@@ -277,16 +290,14 @@ jobs:
       project: MyApp.xcodeproj
       scheme: MyApp
       bundle_id: com.example.myapp
-      sync_command: ./scripts/sync-icon.sh
+      sync_command: bash Scripts/sync-app-icon.sh
       generate_command: xcodegen generate
-      ci_revision: <SHA>
       simulator_name: ${{ inputs.simulator_name || 'iPhone 17 Pro' }}
       ios_runtime: ${{ inputs.ios_runtime || '26' }}
-      live_preview: ${{ inputs.live_preview == true }}
-      preview_minutes: ${{ inputs.preview_minutes || 12 }}
-      public_preview_url: ${{ vars.AGENT_PREVIEW_URL }}
-      screenshot_scheme: MyAppScreenshots
-      capture_screenshots: ${{ inputs.capture_screenshots == true }}
+      live_preview: ${{ inputs.live_preview || false }}
+      preview_minutes: ${{ fromJSON(format('{0}', inputs.preview_minutes || '12')) }}
+      public_preview_url: ${{ vars.AGENT_PREVIEW_URL || '' }}
+      ci_revision: <SHA>
     secrets:
       AGENT_PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
       AGENT_PREVIEW_TUNNEL_TOKEN: ${{ secrets.AGENT_PREVIEW_TUNNEL_TOKEN }}
@@ -296,20 +307,36 @@ jobs:
 
 ```yaml
 name: TestFlight
+
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Archive only, do not upload
+      build_number:
+        description: "Build number (blank: GitHub run number)"
+        type: string
+        required: false
+      marketing_version:
+        description: "Marketing version override (blank: project default)"
+        type: string
+        required: false
+      lookup_only:
+        description: "Only verify Apple registration; do not archive or upload"
         type: boolean
         default: false
-      marketing_version:
-        type: string
-        default: ''
+      dry_run:
+        description: "Unsigned archive only; never upload"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+
 permissions:
   contents: read
+
+concurrency:
+  group: myapp-testflight
+  cancel-in-progress: false
+
 jobs:
   release:
     uses: wenjinliuu/ios-ci-workflows/.github/workflows/testflight-release.yml@<SHA>
@@ -318,17 +345,20 @@ jobs:
       project: MyApp.xcodeproj
       scheme: MyApp
       bundle_id: com.example.myapp
-      display_name: MyApp
-      sync_command: ./scripts/sync-icon.sh
+      sync_command: bash Scripts/sync-app-icon.sh
       generate_command: xcodegen generate
-      dry_run: ${{ inputs.dry_run == true }}
+      build_number: ${{ inputs.build_number || '' }}
       marketing_version: ${{ inputs.marketing_version || '' }}
-      # 可选：
-      # entitlements_path: MyApp/MyApp.entitlements
+      lookup_only: ${{ inputs.lookup_only || false }}
+      dry_run: ${{ inputs.dry_run || false }}
+      artifact_prefix: myapp-
+      ci_revision: <SHA>
+      # 以下按 App 需要选填：
+      # display_name: MyApp
+      # expected_team_id: ABCDE12345
+      # entitlements_path: MyApp/Resources/MyApp.entitlements
       # entitlement_mode: icloud-verified
       # icloud_container: iCloud.com.example.myapp
-      # asc_verify_command: python3 scripts/asc_verify.py
-      # expected_team_id: ABCDE12345
     secrets:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -340,7 +370,7 @@ jobs:
 
 1. 推送一次代码 → **Build & Test** 应产出截图、UI 树、日志。
 2. 手动运行 **Build & Test**，勾选 `live_preview` → 在运行中的 job 日志里找到预览地址，用手机打开、输入密码。
-3. 手动运行 **TestFlight**，先勾选 `dry_run` → 确认 archive 成功。
+3. 手动运行 **TestFlight**，先勾选 `lookup_only` → 确认 Bundle ID 和 App 都已注册；再勾选 `dry_run` → 确认 archive 成功。
 4. 再不勾 `dry_run` 运行一次 → 在 App Store Connect / TestFlight 看到新 build。
 5. 以后发版只需推送 `v1.2.3` 这样的标签。
 
@@ -447,15 +477,15 @@ jobs:
 | 改代码并看结果 | 让 AI 修改并推送；等 **Build & Test** 完成后，把产物中的 `launch.png`、`ui-tree.json`、`app.log` 交给 AI 继续修 |
 | 在手机上实际点一点 | 手动运行 **Build & Test**，勾选 `live_preview`；在运行中的 job 日志 notice 或 summary 里打开地址，输入密码。可点击、滑动、输入文字、查看 UI Tree 和日志 |
 | 换机型 / iOS 版本 | 手动运行时修改 `simulator_name`、`ios_runtime` |
-| 生成 App Store 截图 | 手动运行 **Build & Test**，勾选 `capture_screenshots`；结果在产物和 `ci/screenshots` 分支 |
 | 看图标效果 | 修改图标素材后，看 **App Icon** 产物里的 6 种外观 PNG |
 | 发内测 | 推 `v*` 标签，或手动运行 **TestFlight** |
 | 只验证能不能打包 | 手动运行 **TestFlight**，勾选 `dry_run` |
+| 核对 Apple 侧注册情况 | 手动运行 **TestFlight**，勾选 `lookup_only` |
 
 ## 升级中央工作流
 
 1. 在本仓库修改并合并到 `main`。
-2. 在每个 App 仓库把 `uses: ...@<旧SHA>` 和 `ci_revision: <旧SHA>` **一起** 改成新 SHA。
+2. 在每个 App 仓库把三个入口文件里的 `uses: ...@<旧SHA>` 和 `ci_revision: <旧SHA>` **一起** 改成同一个新 SHA。
 3. 先手动跑一次 Build & Test 和 TestFlight `dry_run` 确认无误。
 
 修改签名、描述文件或上传相关步骤前，先仔细检查现有 TestFlight 运行的输出。
@@ -464,7 +494,7 @@ jobs:
 
 - 所有密钥只存放在 App 仓库的 GitHub Secrets 中，只注入到需要它的步骤；工作流 YAML 和日志中不得出现明文 token。
 - App Store Connect `.p8` 以 `600` 权限写入 runner，job 结束前无论成败都会删除；runner 本身用完即销毁。
-- checkout 一律 `persist-credentials: false`；工作流默认 `contents: read`，只有截图推送需要 `contents: write`。
+- checkout 一律 `persist-credentials: false`；所有工作流都只需要 `contents: read`。
 - 实时预览网关只转发模拟器画面和 HID 触控，**不会**转发 serve-sim 带 shell 能力的 `/exec-ws` 和开发者工具；公网地址开放前会自动验证这一点。
 - 预览密码 ≥12 位，每个 App 使用不同的密码、主机名和 Tunnel token。预览随 job 结束而关闭（最长 20 分钟）。
 - 预览构建不要使用生产账号或真实用户敏感数据。

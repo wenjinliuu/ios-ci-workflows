@@ -24,18 +24,12 @@ let tokenRefreshInFlight: Promise<string> | null = null;
 function base64Url(bytes: Uint8Array): string {
 	let binary = "";
 	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary)
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/g, "");
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 async function createPkcePair() {
 	const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
-	const digest = await crypto.subtle.digest(
-		"SHA-256",
-		new TextEncoder().encode(verifier),
-	);
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
 	return {
 		verifier,
 		challenge: base64Url(new Uint8Array(digest)),
@@ -130,10 +124,7 @@ async function getHostedAccessToken(env: HostedGatewayEnv): Promise<{
 			redirect: "manual",
 		}),
 	);
-	const authorizeLocation = requireString(
-		authorize.location,
-		"authorize Location header",
-	);
+	const authorizeLocation = requireString(authorize.location, "authorize Location header");
 	const sessionId = requireString(
 		new URL(authorizeLocation).searchParams.get("session_id"),
 		"session_id",
@@ -174,8 +165,7 @@ async function getHostedAccessToken(env: HostedGatewayEnv): Promise<{
 		}),
 	);
 
-	let code =
-		typeof consent.json?.code === "string" ? consent.json.code : null;
+	let code = typeof consent.json?.code === "string" ? consent.json.code : null;
 	if (!code && consent.location) {
 		code = new URL(consent.location).searchParams.get("code");
 	}
@@ -226,10 +216,7 @@ async function getHostedAccessToken(env: HostedGatewayEnv): Promise<{
 	};
 }
 
-async function getCachedHostedToken(
-	env: HostedGatewayEnv,
-	forceRefresh = false,
-): Promise<string> {
+async function getCachedHostedToken(env: HostedGatewayEnv, forceRefresh = false): Promise<string> {
 	if (
 		!forceRefresh &&
 		cachedHostedToken &&
@@ -261,11 +248,7 @@ function rewriteInitializeVersion(message: unknown): unknown {
 	if (!message || typeof message !== "object") return message;
 
 	const record = message as Record<string, unknown>;
-	if (
-		record.method === "initialize" &&
-		record.params &&
-		typeof record.params === "object"
-	) {
+	if (record.method === "initialize" && record.params && typeof record.params === "object") {
 		return {
 			...record,
 			params: {
@@ -333,10 +316,7 @@ function downstreamHeaders(upstream: Response): Headers {
 	return headers;
 }
 
-async function proxyHostedMcp(
-	request: Request,
-	env: HostedGatewayEnv,
-): Promise<Response> {
+async function proxyHostedMcp(request: Request, env: HostedGatewayEnv): Promise<Response> {
 	const envId = env.CLOUDBASE_ENV_ID;
 	if (!envId) return new Response("Gateway is not configured.", { status: 500 });
 
@@ -352,9 +332,7 @@ async function proxyHostedMcp(
 	if (request.method === "POST") {
 		requestBody = new Uint8Array(await request.arrayBuffer());
 		if (
-			(request.headers.get("content-type") ?? "")
-				.toLowerCase()
-				.includes("application/json")
+			(request.headers.get("content-type") ?? "").toLowerCase().includes("application/json")
 		) {
 			try {
 				parsedMessage = JSON.parse(new TextDecoder().decode(requestBody));
@@ -402,9 +380,7 @@ async function proxyHostedMcp(
 	} catch (error) {
 		console.error(
 			"Hosted MCP gateway error:",
-			error instanceof Error
-				? sanitizedSnippet(error.message)
-				: "Unknown gateway error",
+			error instanceof Error ? sanitizedSnippet(error.message) : "Unknown gateway error",
 		);
 		return jsonRpcGatewayError(
 			extractRequestId(parsedMessage),

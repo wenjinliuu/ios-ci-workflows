@@ -189,7 +189,7 @@ jobs:
           test "$PREVIEW_MINS" -ge 1 && test "$PREVIEW_MINS" -le 20
           uname -m | grep -q arm64
           npm install --prefix "$RUNNER_TEMP/agent-preview-tools" --no-save --no-audit --no-fund \
-            serve-sim@0.1.46 http-proxy@1.18.1
+            serve-sim@0.1.46 http-proxy@1.18.1 ws@8.21.0
           SIM_TOOLS="$RUNNER_TEMP/agent-preview-tools/node_modules"
           "$SIM_TOOLS/.bin/serve-sim" "${{ steps.sim.outputs.name }}" --host 127.0.0.1 --port 3200 \
             > build/agent-preview/serve-sim.log 2>&1 &
@@ -253,6 +253,16 @@ jobs:
             sleep 2
           done
           test -n "$URL"
+          PUBLIC_READY=false
+          for attempt in 1 2 3; do
+            if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+              node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+              PUBLIC_READY=true
+              break
+            fi
+            sleep 4
+          done
+          test "$PUBLIC_READY" = true
           echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"
           echo "Open: $URL (password: repository secret AGENT_PREVIEW_PASSWORD)" >> "$GITHUB_STEP_SUMMARY"
           echo "Expires when this job ends, within $PREVIEW_MINS minutes." >> "$GITHUB_STEP_SUMMARY"

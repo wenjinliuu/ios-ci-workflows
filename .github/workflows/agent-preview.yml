@@ -245,22 +245,31 @@ jobs:
             -o "$RUNNER_TEMP/cloudflared.tgz"
           echo '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095  '"$RUNNER_TEMP/cloudflared.tgz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C "$RUNNER_TEMP" cloudflared
-          "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
-            > build/agent-preview/tunnel.log 2>&1 &
-          for i in {1..40}; do
-            URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' build/agent-preview/tunnel.log | head -1 || true)
-            if [ -n "$URL" ]; then break; fi
-            sleep 2
-          done
-          test -n "$URL"
           PUBLIC_READY=false
-          for attempt in {1..36}; do
-            if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
-              node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
-              PUBLIC_READY=true
-              break
+          for tunnel_attempt in 1 2 3 4; do
+            "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
+              > build/agent-preview/tunnel.log 2>&1 &
+            TUNNEL_PID=$!
+            URL=""
+            for i in {1..40}; do
+              URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' build/agent-preview/tunnel.log | head -1 || true)
+              if [ -n "$URL" ]; then break; fi
+              sleep 2
+            done
+            if [ -n "$URL" ]; then
+              for attempt in {1..12}; do
+                if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+                  node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+                  PUBLIC_READY=true
+                  break
+                fi
+                sleep 5
+              done
             fi
-            sleep 5
+            if [ "$PUBLIC_READY" = true ]; then break; fi
+            cp build/agent-preview/tunnel.log "build/agent-preview/tunnel-attempt-${tunnel_attempt}.log"
+            kill "$TUNNEL_PID" || true
+            wait "$TUNNEL_PID" || true
           done
           test "$PUBLIC_READY" = true
           echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"

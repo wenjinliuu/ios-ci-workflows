@@ -343,16 +343,41 @@ jobs:
           if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then brew install xcodegen; fi
           bash -e -c "$SYNC_COMMAND"
           bash -e -c "$GENERATE_COMMAND"
+      - name: Select screenshot Simulator
+        id: sim
+        env:
+          REQUESTED_DEVICE: ${{ inputs.screenshot_device }}
+          REQUESTED_RUNTIME: ${{ inputs.ios_runtime }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          items=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json']))['devices']
+          found=[]
+          for runtime, devices in items.items():
+              if 'iOS' not in runtime or os.environ['REQUESTED_RUNTIME'] not in runtime: continue
+              for d in devices:
+                  if d['name'].startswith('iPhone'): found.append((runtime,d))
+          if not found: sys.exit('Requested iOS runtime not installed: '+os.environ['REQUESTED_RUNTIME'])
+          exact=[d for _,d in found if d['name']==os.environ['REQUESTED_DEVICE']]
+          device=exact[0] if exact else sorted((d for _,d in found),key=lambda x:x['name'])[-1]
+          if not exact: print('::warning::Screenshot device '+os.environ['REQUESTED_DEVICE']+' unavailable; using '+device['name'])
+          with open(os.environ['GITHUB_OUTPUT'],'a') as out:
+              out.write('udid='+device['udid']+'\n')
+          print('Selected '+device['name']+' ('+device['udid']+')')
+          PY
       - name: Run screenshot UI tests
         env:
           SCREENSHOT_SCHEME: ${{ inputs.screenshot_scheme }}
-          SIM_NAME: ${{ inputs.screenshot_device }}
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
           PROJECT: ${{ inputs.project }}
         run: |
           set -euo pipefail
           mkdir -p build/screenshots
+          xcrun simctl boot "$SIM_UDID"
+          xcrun simctl bootstatus "$SIM_UDID" -b
           xcodebuild test -project "$PROJECT" -scheme "$SCREENSHOT_SCHEME" \
-            -configuration Debug -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -resultBundlePath build/Screenshots.xcresult CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/screenshots-test.log
       - name: Export screenshots

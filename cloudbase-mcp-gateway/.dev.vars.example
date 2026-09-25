@@ -1,0 +1,4 @@
+# Local secrets for `npm run dev`. Copy to .dev.vars and fill in; never commit .dev.vars.
+CLOUDBASE_API_KEY=
+GITHUB_CLIENT_SECRET=
+COOKIE_ENCRYPTION_KEY=

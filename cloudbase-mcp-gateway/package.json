@@ -1,0 +1,25 @@
+{
+	"name": "cloudbase-mcp-gateway",
+	"version": "1.0.0",
+	"private": true,
+	"license": "MIT",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"cf-typegen": "wrangler types",
+		"type-check": "wrangler types && tsc --noEmit",
+		"format": "oxfmt --write .",
+		"lint:fix": "oxlint --fix"
+	},
+	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.8.3",
+		"hono": "^4.13.8",
+		"octokit": "^5.0.5"
+	},
+	"devDependencies": {
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.83.0",
+		"typescript": "6.0.3",
+		"wrangler": "^4.135.0"
+	}
+}

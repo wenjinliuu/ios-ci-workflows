@@ -11,7 +11,7 @@ Each App calls a fixed commit SHA and keeps its own parameters and secrets. The 
 
 ### Live browser preview
 
-Set an App repository secret named `AGENT_PREVIEW_PASSWORD` (at least 12 characters); manually dispatch its Build & Test workflow with `live_preview=true`. The Actions job summary shows an expiring Quick Tunnel address. Enter the repository password on the login page. The viewer supports video and browser interactions; host command endpoints are filtered at the proxy. The job exits after at most 20 minutes. Do not use production accounts or sensitive real user data in a preview build.
+Set an App repository secret named `AGENT_PREVIEW_PASSWORD` (at least 12 characters); manually dispatch its Build & Test workflow with `live_preview=true`. The Actions job summary shows an expiring Quick Tunnel address. Enter the repository password on the login page. The dedicated viewer offers a live stream, taps, swipes, text entry, UI Tree and recent app logs. Its gateway only forwards the simulator video and HID socket; it never forwards serve-sim's shell-capable `/exec-ws` or developer tools. The job exits after at most 20 minutes. Do not use production accounts or sensitive real user data in a preview build.
 
 Automatic push/PR runs only produce test results, a launch screenshot, an accessibility snapshot if supported by that runtime, and simulator logs. Live sessions do not persist after a runner job exits. To change Simulator targets, set `simulator_name` and `ios_runtime` at manual dispatch. The default is iPhone 17 Pro / iOS 26 (with a model fallback within iOS 26 if necessary).
 

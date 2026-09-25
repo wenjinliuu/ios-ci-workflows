@@ -195,9 +195,45 @@ jobs:
           for i in {1..30}; do curl -fsS http://127.0.0.1:3200/ >/dev/null && break || sleep 2; done
           curl -fsS http://127.0.0.1:3200/ >/dev/null
           cp "$GITHUB_WORKSPACE/.ci-workflows/scripts/preview-proxy.cjs" "$RUNNER_TEMP/preview-proxy.cjs"
-          NODE_PATH="$PWD/node_modules" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" node "$RUNNER_TEMP/preview-proxy.cjs" \
+          NODE_PATH="$PWD/node_modules" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" \
+            SIM_UDID="${{ steps.sim.outputs.udid }}" APP_SCHEME="$SCHEME" \
+            SERVE_SIM_BIN="$PWD/node_modules/.bin/serve-sim" node "$RUNNER_TEMP/preview-proxy.cjs" \
             > build/agent-preview/proxy.log 2>&1 &
           curl -fsS http://127.0.0.1:3210/ >/dev/null
+          python3 - <<'PY'
+          import os, time, urllib.error, urllib.parse, urllib.request
+          base = 'http://127.0.0.1:3210'
+          data = urllib.parse.urlencode({'password': os.environ['PREVIEW_PASSWORD']}).encode()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, msg, headers, newurl):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          try:
+              opener.open(urllib.request.Request(base + '/login', data=data), timeout=10)
+          except urllib.error.HTTPError as response:
+              assert response.code == 303, response.code
+              cookie = response.headers['Set-Cookie'].split(';')[0]
+          assert cookie.startswith('preview_session=')
+          def get(path):
+              return urllib.request.urlopen(urllib.request.Request(base + path, headers={'Cookie': cookie}), timeout=15)
+          with get('/') as response:
+              assert b'iOS Agent Preview' in response.read()
+          try:
+              get('/exec-ws')
+              raise AssertionError('Shell-capable endpoint is public')
+          except urllib.error.HTTPError as response:
+              assert response.code == 404, response.code
+          for attempt in range(3):
+              try:
+                  with get('/helper/stream.mjpeg?raw=1') as response:
+                      assert response.status == 200
+                      assert response.read(2) == b'\xff\xd8', 'No JPEG frame received'
+                  break
+              except (OSError, AssertionError):
+                  if attempt == 2: raise
+                  time.sleep(3)
+          print('Preview authentication, shell isolation and simulator frame verified')
+          PY
           curl -fLsS https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-darwin-arm64.tgz \
             -o "$RUNNER_TEMP/cloudflared.tgz"
           echo '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095  '"$RUNNER_TEMP/cloudflared.tgz" | shasum -a 256 -c -

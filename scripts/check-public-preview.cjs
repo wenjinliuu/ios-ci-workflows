@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const WebSocket = require('ws');
 const origin = process.env.PREVIEW_URL;
 const password = process.env.PREVIEW_PASSWORD;
-assert.match(origin || '', /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/);
+assert.match(origin || '', /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/);
 assert.ok(password);
 
 async function main() {

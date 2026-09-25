@@ -33,6 +33,9 @@ on:
       preview_minutes:
         type: number
         default: 12
+      public_preview_url:
+        type: string
+        default: ''
       ci_revision:
         type: string
         required: true
@@ -47,6 +50,8 @@ on:
         default: iPhone 17 Pro Max
     secrets:
       AGENT_PREVIEW_PASSWORD:
+        required: false
+      AGENT_PREVIEW_TUNNEL_TOKEN:
         required: false
 
 permissions:
@@ -183,6 +188,8 @@ jobs:
         env:
           PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
           PREVIEW_MINS: ${{ inputs.preview_minutes }}
+          PREVIEW_NAMED_URL: ${{ inputs.public_preview_url }}
+          PREVIEW_TUNNEL_TOKEN: ${{ secrets.AGENT_PREVIEW_TUNNEL_TOKEN }}
         run: |
           set -euo pipefail
           test -n "$PREVIEW_PASSWORD" || { echo 'Set AGENT_PREVIEW_PASSWORD in this App repository before enabling live preview'; exit 1; }
@@ -246,31 +253,50 @@ jobs:
           echo '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095  '"$RUNNER_TEMP/cloudflared.tgz" | shasum -a 256 -c -
           tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C "$RUNNER_TEMP" cloudflared
           PUBLIC_READY=false
-          for tunnel_attempt in 1 2 3 4; do
-            "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
+          if [ -n "$PREVIEW_NAMED_URL" ] || [ -n "$PREVIEW_TUNNEL_TOKEN" ]; then
+            test -n "$PREVIEW_NAMED_URL" && test -n "$PREVIEW_TUNNEL_TOKEN" || {
+              echo 'Set both AGENT_PREVIEW_URL variable and AGENT_PREVIEW_TUNNEL_TOKEN secret for a named tunnel'; exit 1;
+            }
+            URL="$PREVIEW_NAMED_URL"
+            printf '%s' "$PREVIEW_TUNNEL_TOKEN" > "$RUNNER_TEMP/agent-preview-tunnel-token"
+            chmod 600 "$RUNNER_TEMP/agent-preview-tunnel-token"
+            "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate run --token-file "$RUNNER_TEMP/agent-preview-tunnel-token" \
               > build/agent-preview/tunnel.log 2>&1 &
-            TUNNEL_PID=$!
-            URL=""
-            for i in {1..40}; do
-              URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' build/agent-preview/tunnel.log | head -1 || true)
-              if [ -n "$URL" ]; then break; fi
-              sleep 2
+            for attempt in {1..36}; do
+              if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+                node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+                PUBLIC_READY=true
+                break
+              fi
+              sleep 5
             done
-            if [ -n "$URL" ]; then
-              for attempt in {1..12}; do
-                if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
-                  node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
-                  PUBLIC_READY=true
-                  break
-                fi
-                sleep 5
+          else
+            for tunnel_attempt in 1 2 3 4; do
+              "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
+                > build/agent-preview/tunnel.log 2>&1 &
+              TUNNEL_PID=$!
+              URL=""
+              for i in {1..40}; do
+                URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' build/agent-preview/tunnel.log | head -1 || true)
+                if [ -n "$URL" ]; then break; fi
+                sleep 2
               done
-            fi
-            if [ "$PUBLIC_READY" = true ]; then break; fi
-            cp build/agent-preview/tunnel.log "build/agent-preview/tunnel-attempt-${tunnel_attempt}.log"
-            kill "$TUNNEL_PID" || true
-            wait "$TUNNEL_PID" || true
-          done
+              if [ -n "$URL" ]; then
+                for attempt in {1..12}; do
+                  if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+                    node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+                    PUBLIC_READY=true
+                    break
+                  fi
+                  sleep 5
+                done
+              fi
+              if [ "$PUBLIC_READY" = true ]; then break; fi
+              cp build/agent-preview/tunnel.log "build/agent-preview/tunnel-attempt-${tunnel_attempt}.log"
+              kill "$TUNNEL_PID" || true
+              wait "$TUNNEL_PID" || true
+            done
+          fi
           test "$PUBLIC_READY" = true
           echo "### Authenticated Agent Preview" >> "$GITHUB_STEP_SUMMARY"
           echo "Open: $URL (password: repository secret AGENT_PREVIEW_PASSWORD)" >> "$GITHUB_STEP_SUMMARY"

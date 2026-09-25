@@ -15,14 +15,14 @@ AI 客户端 ──OAuth──▶ Cloudflare Worker（本网关） ──Bearer 
 
 ## 需要准备的东西
 
-| 项目 | 在哪里创建 | 放在哪里 |
-| --- | --- | --- |
-| CloudBase 环境 ID | 腾讯云开发控制台 | `wrangler.jsonc` → `vars.CLOUDBASE_ENV_ID` |
-| CloudBase API Key | 云开发控制台 → 环境 → API Key 管理 | Worker Secret `CLOUDBASE_API_KEY` |
-| GitHub OAuth App | GitHub → Settings → Developer settings → OAuth Apps | Client ID → `vars.GITHUB_CLIENT_ID`；Client Secret → Worker Secret `GITHUB_CLIENT_SECRET` |
-| 允许登录的 GitHub 账号 | 你自己的 GitHub 用户名 | `vars.ALLOWED_GITHUB_LOGIN` |
-| Cookie 签名密钥 | 本地生成：`openssl rand -hex 32` | Worker Secret `COOKIE_ENCRYPTION_KEY` |
-| KV 命名空间 | `npx wrangler kv namespace create OAUTH_KV` | `wrangler.jsonc` → `kv_namespaces[0].id` |
+| 项目                   | 在哪里创建                                          | 放在哪里                                                                                  |
+| ---------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| CloudBase 环境 ID      | 腾讯云开发控制台                                    | `wrangler.jsonc` → `vars.CLOUDBASE_ENV_ID`                                                |
+| CloudBase API Key      | 云开发控制台 → 环境 → API Key 管理                  | Worker Secret `CLOUDBASE_API_KEY`                                                         |
+| GitHub OAuth App       | GitHub → Settings → Developer settings → OAuth Apps | Client ID → `vars.GITHUB_CLIENT_ID`；Client Secret → Worker Secret `GITHUB_CLIENT_SECRET` |
+| 允许登录的 GitHub 账号 | 你自己的 GitHub 用户名                              | `vars.ALLOWED_GITHUB_LOGIN`                                                               |
+| Cookie 签名密钥        | 本地生成：`openssl rand -hex 32`                    | Worker Secret `COOKIE_ENCRYPTION_KEY`                                                     |
+| KV 命名空间            | `npx wrangler kv namespace create OAUTH_KV`         | `wrangler.jsonc` → `kv_namespaces[0].id`                                                  |
 
 GitHub OAuth App 设置：
 
@@ -72,13 +72,13 @@ https://<worker 名>.<你的子域>.workers.dev/mcp
 
 ## 端点
 
-| 路径 | 作用 |
-| --- | --- |
-| `/mcp` | MCP 端点（需要网关签发的 access token） |
-| `/authorize` | 授权页（确认 → GitHub 登录） |
-| `/callback` | GitHub 回调 |
-| `/token` | 换取 / 刷新 token |
-| `/register` | MCP 客户端动态注册 |
+| 路径         | 作用                                    |
+| ------------ | --------------------------------------- |
+| `/mcp`       | MCP 端点（需要网关签发的 access token） |
+| `/authorize` | 授权页（确认 → GitHub 登录）            |
+| `/callback`  | GitHub 回调                             |
+| `/token`     | 换取 / 刷新 token                       |
+| `/register`  | MCP 客户端动态注册                      |
 
 ## 安全边界
 

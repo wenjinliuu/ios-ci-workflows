@@ -12,7 +12,6 @@ on:
       entitlements_path: {type: string, default: ''}
       entitlement_mode: {type: string, default: none}
       icloud_container: {type: string, default: ''}
-      asc_verify_command: {type: string, default: ''}
       lookup_only: {type: boolean, default: false}
       dry_run: {type: boolean, default: false}
       build_number: {type: string, default: ''}
@@ -21,6 +20,7 @@ on:
       inspect_icloud: {type: boolean, default: false}
       expected_team_id: {type: string, default: ''}
       artifact_prefix: {type: string, default: ''}
+      ci_revision: {type: string, required: true}
     secrets:
       APPLE_TEAM_ID: {required: true}
       APP_STORE_CONNECT_KEY_ID: {required: true}
@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   verify:
-    if: ${{ inputs.asc_verify_command != '' && !inputs.dry_run }}
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -42,25 +42,26 @@ jobs:
       ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
       EXPECTED_BUNDLE_ID: ${{ inputs.bundle_id }}
-      REQUIRED_CAPABILITIES: ICLOUD
       ICLOUD_CONTAINER: ${{ inputs.icloud_container }}
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: wenjinliuu/ios-ci-workflows
+          ref: ${{ inputs.ci_revision }}
           persist-credentials: false
       - name: Verify App Store Connect registration
         id: check
-        env:
-          VERIFY_COMMAND: ${{ inputs.asc_verify_command }}
         run: |
           set -euo pipefail
+          if [ "${{ inputs.entitlement_mode }}" = icloud-verified ] && [ -z "$ICLOUD_CONTAINER" ]; then
+            echo '::error::entitlement_mode icloud-verified needs icloud_container'; exit 1
+          fi
           mkdir -p ~/.appstoreconnect/private_keys
           printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
           chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
           pip install --quiet 'pyjwt[crypto]'
-          if [ "${{ inputs.lookup_only }}" = true ]; then unset REQUIRED_CAPABILITIES EXPECTED_BUNDLE_ID; fi
-          cd "${{ inputs.workdir }}"
-          bash -e -c "$VERIFY_COMMAND"
+          if [ "${{ inputs.lookup_only }}" = true ]; then unset EXPECTED_BUNDLE_ID; fi
+          python3 scripts/asc-verify.py
       - name: Clean up API key
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8

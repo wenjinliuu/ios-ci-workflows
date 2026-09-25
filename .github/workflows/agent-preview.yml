@@ -188,16 +188,18 @@ jobs:
           test -n "$PREVIEW_PASSWORD" || { echo 'Set AGENT_PREVIEW_PASSWORD in this App repository before enabling live preview'; exit 1; }
           test "$PREVIEW_MINS" -ge 1 && test "$PREVIEW_MINS" -le 20
           uname -m | grep -q arm64
-          npm install --no-save --no-audit --no-fund serve-sim@0.1.46 http-proxy@1.18.1
-          ./node_modules/.bin/serve-sim "${{ steps.sim.outputs.name }}" --host 127.0.0.1 --port 3200 \
+          npm install --prefix "$RUNNER_TEMP/agent-preview-tools" --no-save --no-audit --no-fund \
+            serve-sim@0.1.46 http-proxy@1.18.1
+          SIM_TOOLS="$RUNNER_TEMP/agent-preview-tools/node_modules"
+          "$SIM_TOOLS/.bin/serve-sim" "${{ steps.sim.outputs.name }}" --host 127.0.0.1 --port 3200 \
             > build/agent-preview/serve-sim.log 2>&1 &
           echo $! > build/agent-preview/serve-sim.pid
           for i in {1..30}; do curl -fsS http://127.0.0.1:3200/ >/dev/null && break || sleep 2; done
           curl -fsS http://127.0.0.1:3200/ >/dev/null
           cp "$GITHUB_WORKSPACE/.ci-workflows/scripts/preview-proxy.cjs" "$RUNNER_TEMP/preview-proxy.cjs"
-          NODE_PATH="$PWD/node_modules" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" \
+          NODE_PATH="$SIM_TOOLS" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" \
             SIM_UDID="${{ steps.sim.outputs.udid }}" APP_SCHEME="$SCHEME" \
-            SERVE_SIM_BIN="$PWD/node_modules/.bin/serve-sim" node "$RUNNER_TEMP/preview-proxy.cjs" \
+            SERVE_SIM_BIN="$SIM_TOOLS/.bin/serve-sim" node "$RUNNER_TEMP/preview-proxy.cjs" \
             > build/agent-preview/proxy.log 2>&1 &
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:3210/ >/dev/null 2>&1; then break; fi

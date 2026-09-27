@@ -39,6 +39,21 @@ on:
       ci_revision:
         type: string
         required: true
+      ci_repository:
+        type: string
+        default: wenjinliuu/ios-ci-workflows
+      test_plan:
+        type: string
+        default: ''
+      record_snapshots:
+        type: boolean
+        default: false
+      accessibility_audit:
+        type: string
+        default: warn
+      accessibility_test_pattern:
+        type: string
+        default: '(?i)accessibility'
     secrets:
       AGENT_PREVIEW_PASSWORD:
         required: false
@@ -67,13 +82,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Fetch shared CI scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.ci_repository }}
+          ref: ${{ inputs.ci_revision }}
+          path: .ci-workflows
+          persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.6'
       - name: Check toolchain and install project generator
         run: |
+          set -euo pipefail
+          test "${{ inputs.accessibility_audit }}" = warn || test "${{ inputs.accessibility_audit }}" = fail
           xcodebuild -version
           if [[ "${{ inputs.generate_command }}" == *xcodegen* ]]; then brew install xcodegen; fi
+          curl -fLsS https://github.com/cpisciotta/xcbeautify/releases/download/3.2.1/xcbeautify-3.2.1-arm64-apple-macosx.zip \
+            -o "$RUNNER_TEMP/xcbeautify.zip"
+          echo "ed32972e41bc3aa19588f8b0f4a0209ef70c663ad60bbf4ad84a2de73355d637  $RUNNER_TEMP/xcbeautify.zip" | shasum -a 256 -c -
+          unzip -oq "$RUNNER_TEMP/xcbeautify.zip" -d "$RUNNER_TEMP/xcbeautify"
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
@@ -96,16 +124,19 @@ jobs:
           import json, os, subprocess, sys
           items=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json']))['devices']
           found=[]
+          runtime_of={}
           for runtime, devices in items.items():
               if 'iOS' not in runtime or os.environ['REQUESTED_RUNTIME'] not in runtime: continue
               for d in devices:
-                  if d['name'].startswith('iPhone'): found.append((runtime,d))
+                  if d['name'].startswith('iPhone'):
+                      found.append((runtime,d))
+                      runtime_of[d['udid']]=runtime.rsplit('.',1)[-1].replace('iOS-','iOS ').replace('-','.')
           if not found: sys.exit('Requested iOS runtime not installed: '+os.environ['REQUESTED_RUNTIME'])
           exact=[d for _,d in found if d['name']==os.environ['REQUESTED_DEVICE']]
           device=exact[0] if exact else sorted((d for _,d in found),key=lambda x:x['name'])[-1]
-          if not exact: print('Requested model unavailable; fallback: '+device['name'])
+          if not exact: print('::warning::Simulator '+os.environ['REQUESTED_DEVICE']+' unavailable; using '+device['name']+' (snapshot references may not match)')
           with open(os.environ['GITHUB_OUTPUT'],'a') as out:
-              out.write('udid='+device['udid']+'\nname='+device['name']+'\n')
+              out.write('udid='+device['udid']+'\nname='+device['name']+'\nruntime='+runtime_of[device['udid']]+'\n')
           print('Selected '+device['name']+' ('+device['udid']+')')
           PY
       - name: Boot selected Simulator
@@ -113,17 +144,29 @@ jobs:
           xcrun simctl boot "${{ steps.sim.outputs.udid }}"
           xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
       - name: Build and run tests without signing
+        id: test
         env:
           NSUnbufferedIO: YES
+          TEST_PLAN: ${{ inputs.test_plan }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
         run: |
-          set -euo pipefail
+          # The step shell runs with -e; keep going on test failures so the outputs below are written.
+          set +e -uo pipefail
           mkdir -p build/agent-preview
-          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+          args=()
+          if [ -n "$TEST_PLAN" ]; then args+=(-testPlan "$TEST_PLAN"); fi
+          # xcodebuild hands TEST_RUNNER_* variables to the test process without the prefix.
+          if [ "$RECORD_SNAPSHOTS" = true ]; then export TEST_RUNNER_SNAPSHOT_TESTING_RECORD=failed; fi
+          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration Debug ${args[@]+"${args[@]}"} \
             -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath "$DERIVED_DATA" -resultBundlePath build/agent-preview/Test.xcresult \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/agent-preview/xcodebuild.log
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/agent-preview/xcodebuild.log \
+            | "$RUNNER_TEMP/xcbeautify/xcbeautify" --renderer github-actions
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
+          if [ -d "$APP" ]; then echo built=true >> "$GITHUB_OUTPUT"; else echo built=false >> "$GITHUB_OUTPUT"; fi
       - name: Install, launch and capture evidence
-        if: success()
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' }}
         run: |
           set -euo pipefail
           APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
@@ -136,7 +179,7 @@ jobs:
           xcrun simctl spawn "${{ steps.sim.outputs.udid }}" log show --last 2m --style compact \
             --predicate "process == '${SCHEME}'" > build/agent-preview/app.log 2>&1 || true
       - name: Capture accessibility tree with XcodeBuildMCP
-        if: success()
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -166,16 +209,36 @@ jobs:
           done
           echo '::warning::XcodeBuildMCP could not capture the Simulator accessibility hierarchy; inspect ui-tree.json in the artifact.'
           exit 1
-      - name: Start authenticated browser session
-        if: ${{ success() && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
-        uses: actions/checkout@v4
-        with:
-          repository: wenjinliuu/ios-ci-workflows
-          ref: ${{ inputs.ci_revision }}
-          path: .ci-workflows
-          persist-credentials: false
+      - name: Collect recorded snapshot references
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/recorded-snapshots"
+          git ls-files -z --others --modified --exclude-standard -- ':(glob)**/__Snapshots__/**' ':!.ci-workflows' \
+            | while IFS= read -r -d '' file; do
+                mkdir -p "$RUNNER_TEMP/recorded-snapshots/$(dirname "$file")"
+                cp "$file" "$RUNNER_TEMP/recorded-snapshots/$file"
+                printf '%s\n' "$file"
+              done > "$RUNNER_TEMP/recorded-snapshots.txt"
+          echo "Recorded snapshot files: $(wc -l < "$RUNNER_TEMP/recorded-snapshots.txt")"
+      - name: Write test report
+        id: report
+        if: ${{ !cancelled() }}
+        env:
+          XCRESULT: build/agent-preview/Test.xcresult
+          REPORT_DIR: build/agent-preview/report
+          BUILD_LOG: build/agent-preview/xcodebuild.log
+          BUILT: ${{ steps.test.outputs.built }}
+          DEVICE: ${{ steps.sim.outputs.name }} (${{ steps.sim.outputs.runtime }})
+          TEST_PLAN: ${{ inputs.test_plan }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
+          RECORDED_LIST: ${{ runner.temp }}/recorded-snapshots.txt
+          ACCESSIBILITY_MODE: ${{ inputs.accessibility_audit }}
+          ACCESSIBILITY_PATTERN: ${{ inputs.accessibility_test_pattern }}
+        run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/xcresult-report.py"
       - name: Run authenticated browser session
-        if: ${{ success() && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' && inputs.live_preview && github.event_name == 'workflow_dispatch' }}
         env:
           PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
           PREVIEW_MINS: ${{ inputs.preview_minutes }}
@@ -310,3 +373,73 @@ jobs:
           path: ${{ inputs.workdir }}/build/agent-preview/Test.xcresult
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload recorded snapshot references
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recorded-snapshots-${{ github.run_number }}
+          path: ${{ runner.temp }}/recorded-snapshots
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Apply pass/fail rules
+        if: ${{ !cancelled() }}
+        env:
+          BUILT: ${{ steps.test.outputs.built }}
+          EXIT_CODE: ${{ steps.test.outputs.exit_code }}
+          TEST_FAILURES: ${{ steps.report.outputs.test_failures }}
+          SNAPSHOT_FAILURES: ${{ steps.report.outputs.snapshot_failures }}
+          ACCESSIBILITY_FAILURES: ${{ steps.report.outputs.accessibility_failures }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
+          ACCESSIBILITY_MODE: ${{ inputs.accessibility_audit }}
+        run: |
+          set -euo pipefail
+          if [ "$BUILT" != true ]; then echo '::error::Build failed; see the test report and xcodebuild.log'; exit 1; fi
+          tests=${TEST_FAILURES:-0}; snapshots=${SNAPSHOT_FAILURES:-0}; audits=${ACCESSIBILITY_FAILURES:-0}
+          blocking=$tests
+          if [ "$RECORD_SNAPSHOTS" = true ]; then
+            echo "::notice::Snapshot recording run: $snapshots snapshot(s) re-recorded; commit them from recorded-snapshots-${{ github.run_number }}"
+          else
+            blocking=$(( blocking + snapshots ))
+          fi
+          if [ "$ACCESSIBILITY_MODE" = fail ]; then
+            blocking=$(( blocking + audits ))
+          elif [ "$audits" -gt 0 ]; then
+            echo "::warning::$audits accessibility audit failure(s); warning only"
+          fi
+          if [ "$blocking" -gt 0 ]; then echo "::error::$blocking blocking test failure(s); see the test report"; exit 1; fi
+          # A non-zero exit with nothing attributed (runner crash, bundle failed to load) is still a failure.
+          if [ "${EXIT_CODE:-1}" != 0 ] && [ $(( tests + snapshots + audits )) -eq 0 ]; then
+            echo "::error::xcodebuild test exited with $EXIT_CODE without reporting a test failure; see xcodebuild.log"; exit 1
+          fi
+  static-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: SwiftLint and SwiftFormat (only when the App repository has their config)
+        env:
+          WORKDIR: ${{ inputs.workdir }}
+        run: |
+          set -euo pipefail
+          config_dir() { for dir in "$WORKDIR" .; do if [ -f "$dir/$1" ]; then echo "$dir"; return; fi; done; }
+          lint_dir=$(config_dir .swiftlint.yml); format_dir=$(config_dir .swiftformat)
+          if [ -z "$lint_dir" ] && [ -z "$format_dir" ]; then
+            echo '::notice::No .swiftlint.yml or .swiftformat found; static checks skipped'; exit 0
+          fi
+          status=0
+          if [ -n "$lint_dir" ]; then
+            curl -fLsS https://github.com/realm/SwiftLint/releases/download/0.65.1/swiftlint_linux_amd64.zip -o "$RUNNER_TEMP/swiftlint.zip"
+            echo "caeed6f4a679c35539ffaf124f6c4ab4a8416917f7d8796279dc52b74026059d  $RUNNER_TEMP/swiftlint.zip" | sha256sum -c -
+            unzip -oq "$RUNNER_TEMP/swiftlint.zip" swiftlint-static -d "$RUNNER_TEMP"
+            (cd "$lint_dir" && "$RUNNER_TEMP/swiftlint-static" lint --reporter github-actions-logging) || status=1
+          fi
+          if [ -n "$format_dir" ]; then
+            curl -fLsS https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat_linux.zip -o "$RUNNER_TEMP/swiftformat.zip"
+            echo "b4a3cbb8c852a0baaf9adf853e221ff1dabf921a3d8957a602e0bda3af8470f1  $RUNNER_TEMP/swiftformat.zip" | sha256sum -c -
+            unzip -oq "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP"
+            chmod +x "$RUNNER_TEMP/swiftformat_linux"
+            (cd "$format_dir" && "$RUNNER_TEMP/swiftformat_linux" --lint --reporter github-actions-log .) || status=1
+          fi
+          exit "$status"

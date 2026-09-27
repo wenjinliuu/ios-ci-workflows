@@ -108,7 +108,7 @@ def one_line(text: str, limit: int = 300) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool) -> str:
+def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool, run: str = "<run>") -> str:
     lines = ["## 测试报告", ""]
     if not report["built"]:
         lines += ["**编译失败，没有测试结果。** 下面是 xcodebuild.log 里的错误（完整日志在产物里）：", ""]
@@ -138,11 +138,11 @@ def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool)
             lines.append(f"| `{item['test']}` | {one_line(item['reason'])} | {files} |")
         lines.append("")
     if any(f["attachments"] for f in report["failures"]):
-        lines += ["附件（快照的 reference / failure / difference 图等）在产物 `agent-preview-<run>` 的 `report/attachments/` 里。", ""]
+        lines += [f"附件（快照的 reference / failure / difference 图等）在产物 `agent-preview-{run}` 的 `report/attachments/` 里。", ""]
 
     if report["recorded_snapshots"]:
         lines += [f"### 新录制的快照参考图（{len(report['recorded_snapshots'])}）", "",
-                  "已打包为产物 `recorded-snapshots-<run>`，按原路径解压后提交回 App 仓库：", ""]
+                  f"已打包为产物 `recorded-snapshots-{run}`，按原路径解压后提交回 App 仓库：", ""]
         lines += [f"- `{path}`" for path in report["recorded_snapshots"]]
         lines.append("")
     if not report["failures"]:
@@ -177,7 +177,8 @@ def main() -> int:
                           device=os.environ.get("DEVICE", ""), test_plan=os.environ.get("TEST_PLAN", ""),
                           recorded=[p for p in recorded if p], build_log_errors=errors)
     markdown = render_markdown(report, accessibility_mode=os.environ.get("ACCESSIBILITY_MODE", "warn"),
-                               record_mode=os.environ.get("RECORD_SNAPSHOTS") == "true")
+                               record_mode=os.environ.get("RECORD_SNAPSHOTS") == "true",
+                               run=os.environ.get("GITHUB_RUN_NUMBER", "<run>"))
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
     (out / "report.md").write_text(markdown)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

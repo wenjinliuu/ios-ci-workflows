@@ -150,7 +150,8 @@ jobs:
           TEST_PLAN: ${{ inputs.test_plan }}
           RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
         run: |
-          set -uo pipefail
+          # The step shell runs with -e; keep going on test failures so the outputs below are written.
+          set +e -uo pipefail
           mkdir -p build/agent-preview
           args=()
           if [ -n "$TEST_PLAN" ]; then args+=(-testPlan "$TEST_PLAN"); fi

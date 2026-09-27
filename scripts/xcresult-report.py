@@ -157,8 +157,9 @@ def main() -> int:
     recorded_list = Path(os.environ.get("RECORDED_LIST", ""))
     recorded = recorded_list.read_text().split("\n") if recorded_list.is_file() else []
     log = Path(os.environ.get("BUILD_LOG", ""))
+    # 编译错误行；测试失败也会写成 "error: -[Suite test] : failed"，不算在内
     errors = [line.strip() for line in log.read_text(errors="replace").splitlines()
-              if " error: " in line or line.startswith("error:")] if log.is_file() else []
+              if (" error: " in line or line.startswith("error:")) and "] : failed" not in line] if log.is_file() else []
 
     built = os.environ.get("BUILT") == "true"
     summary = None

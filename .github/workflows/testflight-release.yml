@@ -21,20 +21,61 @@ on:
       expected_team_id: {type: string, default: ''}
       artifact_prefix: {type: string, default: ''}
       ci_revision: {type: string, required: true}
+      ci_repository: {type: string, default: wenjinliuu/ios-ci-workflows}
+      build_workflow: {type: string, default: ''}
+      build_wait_minutes: {type: number, default: 30}
+      acceptance_issue: {type: boolean, default: false}
+      acceptance_checklist: {type: string, default: .github/release-checklist.md}
+      acceptance_extra: {type: string, default: .github/release-checklist-current.md}
     secrets:
       APPLE_TEAM_ID: {required: true}
       APP_STORE_CONNECT_KEY_ID: {required: true}
       APP_STORE_CONNECT_ISSUER_ID: {required: true}
       APP_STORE_CONNECT_PRIVATE_KEY: {required: true}
 
-permissions:
-  contents: read
-
+# No workflow-level permissions: verify and release pin contents: read themselves, while the optional
+# gate and acceptance jobs inherit the caller's token, so callers that skip them grant nothing extra.
 jobs:
+  gate:
+    # Release only a commit whose Build & Test run is green.
+    if: ${{ inputs.build_workflow != '' && !inputs.dry_run && !inputs.lookup_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Require a green Build & Test run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.build_workflow }}
+          WAIT_MINUTES: ${{ inputs.build_wait_minutes }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+          while true; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW/runs?head_sha=$GITHUB_SHA&per_page=20" \
+              --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]') || {
+              echo "::error::Cannot read $WORKFLOW runs; grant 'actions: read' in the caller workflow"; exit 1; }
+            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<< "$runs")" -gt 0 ]; then
+              echo "Build & Test passed for $GITHUB_SHA: $(jq -r '[.[] | select(.conclusion == "success")][0].url' <<< "$runs")"
+              exit 0
+            fi
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<< "$runs")
+            if [ "$pending" -eq 0 ]; then
+              echo "::error::No green $WORKFLOW run for $GITHUB_SHA; fix Build & Test before releasing"
+              jq -r '.[] | "  \(.conclusion // .status)  \(.url)"' <<< "$runs"
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$WORKFLOW for $GITHUB_SHA still running after $WAIT_MINUTES minutes"; exit 1
+            fi
+            echo "Waiting for $pending $WORKFLOW run(s) on $GITHUB_SHA…"
+            sleep 30
+          done
   verify:
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       icloud: ${{ steps.check.outputs.icloud }}
     env:
@@ -46,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: wenjinliuu/ios-ci-workflows
+          repository: ${{ inputs.ci_repository }}
           ref: ${{ inputs.ci_revision }}
           persist-credentials: false
       - name: Verify App Store Connect registration
@@ -66,10 +107,18 @@ jobs:
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
   release:
-    needs: verify
-    if: ${{ always() && !cancelled() && !inputs.lookup_only && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    needs: [gate, verify]
+    if: >-
+      ${{ always() && !cancelled() && !inputs.lookup_only
+      && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
+      && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
     runs-on: macos-26
     timeout-minutes: 55
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.archived.outputs.version }}
+      number: ${{ steps.version.outputs.number }}
     defaults:
       run:
         working-directory: ${{ inputs.workdir }}
@@ -138,6 +187,7 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" "${flags[@]}" \
             2>&1 | tee build/release-archive.log
       - name: Verify archived app and embedded icon
+        id: archived
         run: |
           set -euo pipefail
           APP_PATH=$(find "build/${SCHEME}.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -type d -print -quit)
@@ -147,6 +197,7 @@ jobs:
           if [ -n "$EXPECTED_DISPLAY_NAME" ]; then
             test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist")" = "$EXPECTED_DISPLAY_NAME"
           fi
+          echo "version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" >> "$GITHUB_OUTPUT"
       - name: Embed entitlements into unsigned archive
         if: ${{ !inputs.dry_run && inputs.entitlement_mode != 'none' }}
         continue-on-error: ${{ inputs.entitlement_mode == 'best-effort' }}
@@ -236,3 +287,40 @@ jobs:
       - name: Clean up API key
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
+  acceptance:
+    # Opens a device checklist issue for the build that was just uploaded.
+    needs: release
+    if: ${{ inputs.acceptance_issue && !inputs.dry_run && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Open release acceptance issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_NAME: ${{ inputs.display_name || inputs.scheme }}
+          VERSION: ${{ needs.release.outputs.version }}
+          NUMBER: ${{ needs.release.outputs.number }}
+          CHECKLIST: ${{ inputs.acceptance_checklist }}
+          EXTRA: ${{ inputs.acceptance_extra }}
+        run: |
+          set -euo pipefail
+          section() { if [ -s "$1" ]; then cat "$1"; else echo "$2"; fi; }
+          {
+            echo "TestFlight 已上传 **$APP_NAME $VERSION ($NUMBER)**，提交 $GITHUB_SHA。"
+            echo
+            echo "装上这个 build 后在真机上逐项检查：通过就打勾，有问题在下面评论（可以配截图）。AI 下次会读这个 Issue 修问题。"
+            echo
+            echo "## 固定项"
+            echo
+            section "$CHECKLIST" "（仓库里还没有 \`$CHECKLIST\`）"
+            echo
+            echo "## 本次项"
+            echo
+            section "$EXTRA" "（本次没有额外项；AI 可以把针对这次改动的检查项写进 \`$EXTRA\`）"
+          } > "$RUNNER_TEMP/acceptance.md"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$APP_NAME $VERSION ($NUMBER) 发版验收" --body-file "$RUNNER_TEMP/acceptance.md" || {
+            echo "::error::Cannot open the acceptance issue; grant 'issues: write' in the caller workflow"; exit 1; }

@@ -4,9 +4,13 @@ on:
   workflow_call:
     inputs:
       ci_revision:
-        description: Commit of wenjinliuu/ios-ci-workflows whose cloudbase-mcp-gateway is deployed; match the uses @ SHA
+        description: Commit of ci_repository whose cloudbase-mcp-gateway is deployed; match the uses @ SHA
         type: string
         required: true
+      ci_repository:
+        description: Repository the gateway code is fetched from; set it to your fork when you use one
+        type: string
+        default: wenjinliuu/ios-ci-workflows
       worker_name:
         type: string
         default: cloudbase-mcp-gateway
@@ -55,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: wenjinliuu/ios-ci-workflows
+          repository: ${{ inputs.ci_repository }}
           ref: ${{ inputs.ci_revision }}
           path: .ci-workflows
           persist-credentials: false

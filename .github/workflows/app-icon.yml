@@ -9,14 +9,17 @@ on:
       icon_path: {type: string, required: true}
       sync_command: {type: string, required: true}
       generate_command: {type: string, required: true}
+      commit_previews: {type: boolean, default: false}
+      previews_dir: {type: string, default: DesignAssets/AppIcon/previews}
 
-permissions:
-  contents: read
-
+# No workflow-level permissions: both checks pin contents: read, while the optional publish-previews job
+# inherits the caller's token, so only callers that turn commit_previews on grant contents: write.
 jobs:
   native-validation:
     runs-on: macos-26
     timeout-minutes: 40
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.workdir }}
@@ -57,6 +60,8 @@ jobs:
   preview:
     runs-on: macos-26
     timeout-minutes: 25
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.workdir }}
@@ -87,3 +92,51 @@ jobs:
           name: app-icon-${{ github.sha }}
           path: ${{ inputs.workdir }}/build/app-icon
           if-no-files-found: warn
+  publish-previews:
+    # Commits the renditions back so the repository shows them; pushes made with the job token
+    # do not start new workflow runs, so this cannot loop.
+    needs: preview
+    if: ${{ inputs.commit_previews && github.event_name == 'push' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-icon-${{ github.sha }}
+          path: ${{ runner.temp }}/app-icon
+      - name: Write previews and README
+        env:
+          PREVIEWS_DIR: ${{ inputs.previews_dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$PREVIEWS_DIR"
+          labels=(Default:默认 Dark:深色 TintedLight:着色·浅 TintedDark:着色·深 ClearLight:透明·浅 ClearDark:透明·深 Marketing-1024:市场图)
+          {
+            echo '# App 图标预览'
+            echo
+            echo "同一个图标在 iOS 各种外观模式下的渲染效果，外加 1 张 1024 市场图。由 CI 自动生成，请勿手改。"
+            echo
+            header='|'; divider='|'; images='|'
+            for pair in "${labels[@]}"; do
+              name=${pair%%:*}; label=${pair#*:}
+              if [ -f "$RUNNER_TEMP/app-icon/$name.png" ]; then
+                cp "$RUNNER_TEMP/app-icon/$name.png" "$PREVIEWS_DIR/$name.png"
+                header+=" $label |"; divider+=' --- |'; images+=" <img src=\"$name.png\" width=\"120\"> |"
+              fi
+            done
+            printf '%s\n%s\n%s\n' "$header" "$divider" "$images"
+          } > "$PREVIEWS_DIR/README.md"
+      - name: Commit previews
+        env:
+          PREVIEWS_DIR: ${{ inputs.previews_dir }}
+        run: |
+          set -euo pipefail
+          git add -A "$PREVIEWS_DIR"
+          if git diff --cached --quiet; then echo 'Previews unchanged'; exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q -m "Update app icon previews for ${GITHUB_SHA:0:7}"
+          git pull -q --rebase origin "$GITHUB_REF_NAME"
+          git push -q origin "HEAD:$GITHUB_REF_NAME" || {
+            echo "::error::Cannot push previews; grant 'contents: write' in the caller workflow"; exit 1; }

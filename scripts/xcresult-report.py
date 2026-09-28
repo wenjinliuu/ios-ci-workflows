@@ -108,7 +108,8 @@ def one_line(text: str, limit: int = 300) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool, run: str = "<run>") -> str:
+def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool, run: str = "<run>",
+                    commit_recorded: bool = False) -> str:
     lines = ["## 测试报告", ""]
     if not report["built"]:
         lines += ["**编译失败，没有测试结果。** 下面是 xcodebuild.log 里的错误（完整日志在产物里）：", ""]
@@ -116,7 +117,13 @@ def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool,
         return "\n".join(lines) + "\n"
 
     c = report["counts"]
-    lines.append(f"结果：**{report['result']}** · 共 {c['totalTestCount']} 个测试，通过 {c['passedTests']}，"
+    # 结论按 CI 的判定规则写，和 xcresult 自己的 Passed/Failed 不同：录制模式的快照、只警告的无障碍问题不算失败
+    kinds = [f["kind"] for f in report["failures"]]
+    blocking = kinds.count("test") + (0 if record_mode else kinds.count("snapshot")) \
+        + (kinds.count("accessibility") if accessibility_mode == "fail" else 0)
+    warnings = 0 if accessibility_mode == "fail" else kinds.count("accessibility")
+    verdict = "未通过" if blocking else (f"通过（{warnings} 个无障碍警告）" if warnings else "通过")
+    lines.append(f"结论：**{verdict}** · xcresult：{report['result']} · 共 {c['totalTestCount']} 个测试，通过 {c['passedTests']}，"
                  f"失败 {c['failedTests']}，跳过 {c['skippedTests']}")
     lines.append(f"模拟器：{report['device']}" + (f" · 测试计划：{report['test_plan']}" if report["test_plan"] else ""))
     if report["configurations"]:
@@ -142,7 +149,8 @@ def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool,
 
     if report["recorded_snapshots"]:
         lines += [f"### 新录制的快照参考图（{len(report['recorded_snapshots'])}）", "",
-                  f"已打包为产物 `recorded-snapshots-{run}`，按原路径解压后提交回 App 仓库：", ""]
+                  (f"commit-snapshots 任务会把它们提交回这个分支；之后再手动跑一次 Build & Test 核对：" if commit_recorded
+                   else f"已打包为产物 `recorded-snapshots-{run}`，按原路径解压后提交回 App 仓库："), ""]
         lines += [f"- `{path}`" for path in report["recorded_snapshots"]]
         lines.append("")
     if not report["failures"]:
@@ -178,7 +186,8 @@ def main() -> int:
                           recorded=[p for p in recorded if p], build_log_errors=errors)
     markdown = render_markdown(report, accessibility_mode=os.environ.get("ACCESSIBILITY_MODE", "warn"),
                                record_mode=os.environ.get("RECORD_SNAPSHOTS") == "true",
-                               run=os.environ.get("GITHUB_RUN_NUMBER", "<run>"))
+                               run=os.environ.get("GITHUB_RUN_NUMBER", "<run>"),
+                               commit_recorded=os.environ.get("COMMIT_RECORDED") == "true")
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
     (out / "report.md").write_text(markdown)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

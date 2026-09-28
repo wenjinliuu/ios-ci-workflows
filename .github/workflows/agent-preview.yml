@@ -238,6 +238,7 @@ jobs:
           TEST_PLAN: ${{ inputs.test_plan }}
           RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
           RECORDED_LIST: ${{ runner.temp }}/recorded-snapshots.txt
+          COMMIT_RECORDED: ${{ inputs.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
           ACCESSIBILITY_MODE: ${{ inputs.accessibility_audit }}
           ACCESSIBILITY_PATTERN: ${{ inputs.accessibility_test_pattern }}
         run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/xcresult-report.py"

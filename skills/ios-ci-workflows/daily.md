@@ -51,7 +51,7 @@
 | 关键流程 | XCUITest，用示例数据启动，不读写用户数据 | 只写 3～5 条 |
 | 无障碍审计 | 写在关键流程里：流程走到哪一页，就在那一页调用 `performAccessibilityAudit()`，不为每个页面单独启动 App | 每个页面至少被一条流程走到并审计一次 |
 
-无障碍审计的写法：在审计的问题处理闭包里用 `XCTFail("Accessibility audit（页面名）：问题 — 元素")` 记录每个问题并返回 `true`，失败信息以 “Accessibility audit” 开头，CI 才能把它归为无障碍问题；写上元素的标签和位置，报告里就能直接定位。新加一个页面或弹窗时，让某条关键流程走到它并审计。
+无障碍审计的写法：在审计的问题处理闭包里用 `XCTFail("Accessibility audit（页面名）：问题 — 元素")` 记录每个问题并返回 `true`，失败信息以 “Accessibility audit” 开头，CI 才能把它归为无障碍问题；写上元素的标签和位置，报告里就能直接定位。元素多的页面在慢 runner 上审计可能超时（“Audit failed to complete in time”）：先把问题收集起来、审计完成后再逐条 `XCTFail`，超时就重跑一次，这样重跑不会把同一个问题记两遍（样例见 CalenEase 的 `KeyFlowTests.auditAccessibility`）。新加一个页面或弹窗时，让某条关键流程走到它并审计。
 
 写 XCUITest 前先看最近一次慢线或全部测试报告里的 `ui-tree.json`：里面是真实界面的元素、标签和层级，按它写查询，不要猜。快线的报告里没有它，需要时手动跑一次 `ui`。
 

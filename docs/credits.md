@@ -7,7 +7,7 @@
 | 项目 | 状态 | 用在哪 | 作用 |
 | --- | --- | --- | --- |
 | [swift-snapshot-testing](https://github.com/pointfreeco/swift-snapshot-testing) | 采用（App 依赖） | Build & Test | 快照测试，苹果没有官方方案 |
-| [swift-dependencies](https://github.com/pointfreeco/swift-dependencies) | 采用（App 依赖） | App 代码 + 测试 | 控制“今天”等依赖，测日期边界 |
+| [swift-dependencies](https://github.com/pointfreeco/swift-dependencies) | 可选（App 依赖） | App 代码 + 测试 | 控制“今天”等依赖；也可以直接把时间作为参数传入 |
 | [SwiftLint](https://github.com/realm/SwiftLint) / [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) | 采用 | Build & Test（Linux） | 规范、格式 |
 | [xcbeautify](https://github.com/cpisciotta/xcbeautify) | 采用 | Build & Test | 整理日志 |
 | [XcodeGen](https://github.com/yonaskolb/XcodeGen) | 采用 | 所有 iOS 工作流 | 用 `project.yml` 生成工程 |

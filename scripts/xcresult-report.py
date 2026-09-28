@@ -8,7 +8,8 @@
 - attachments/：失败测试带的附件（快照的 reference / failure / difference 图等）
 
 失败分三类，通过/失败规则由 CI 的最后一步按这里的分类决定：
-- accessibility：测试名匹配 ACCESSIBILITY_PATTERN 的失败（无障碍审计），ACCESSIBILITY_MODE=warn 时只警告
+- accessibility：测试名或失败信息匹配 ACCESSIBILITY_PATTERN 的失败（无障碍审计），ACCESSIBILITY_MODE=warn 时只警告。
+  审计写在关键流程里时，失败信息以 “Accessibility audit” 开头，照样归到这一类
 - snapshot：快照与参考图不一致、或刚录制了新参考图
 - test：其余所有失败（逻辑测试、关键流程）
 
@@ -24,6 +25,12 @@ from pathlib import Path
 
 SNAPSHOT_HINTS = ("snapshot", "automatically recorded", "no reference was found")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".heic")
+SUITE_LABELS = {
+    "fast": "快线（逻辑 + 迁移 + 快照）",
+    "ui": "慢线（UI 关键流程 + 无障碍审计）",
+    "full": "全部测试",
+    "default": "scheme 的全部测试",
+}
 
 
 def xcresulttool(*args: str) -> str:
@@ -52,7 +59,7 @@ def test_name(failure: dict) -> str:
 
 
 def classify(failure: dict, pattern: re.Pattern) -> str:
-    if pattern.search(test_name(failure)):
+    if pattern.search(test_name(failure)) or pattern.search(failure.get("failureText") or ""):
         return "accessibility"
     text = (failure.get("failureText") or "").lower()
     if any(hint in text for hint in SNAPSHOT_HINTS):
@@ -69,7 +76,7 @@ def attachments_by_test(manifest: list[dict]) -> dict[str, list[dict]]:
 
 
 def build_report(summary: dict | None, manifest: list[dict], *, built: bool, pattern: str, device: str,
-                 test_plan: str, recorded: list[str], build_log_errors: list[str]) -> dict:
+                 test_plan: str, recorded: list[str], build_log_errors: list[str], suite: str = "") -> dict:
     regex = re.compile(pattern)
     attachments = attachments_by_test(manifest)
     failures = []
@@ -94,6 +101,7 @@ def build_report(summary: dict | None, manifest: list[dict], *, built: bool, pat
         "built": built,
         "result": (summary or {}).get("result", "No results"),
         "device": device,
+        "suite": suite,
         "test_plan": test_plan,
         "configurations": configurations,
         "counts": counts,
@@ -125,7 +133,9 @@ def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool,
     verdict = "未通过" if blocking else (f"通过（{warnings} 个无障碍警告）" if warnings else "通过")
     lines.append(f"结论：**{verdict}** · xcresult：{report['result']} · 共 {c['totalTestCount']} 个测试，通过 {c['passedTests']}，"
                  f"失败 {c['failedTests']}，跳过 {c['skippedTests']}")
-    lines.append(f"模拟器：{report['device']}" + (f" · 测试计划：{report['test_plan']}" if report["test_plan"] else ""))
+    suite = SUITE_LABELS.get(report.get("suite", ""), report.get("suite", ""))
+    lines.append(f"模拟器：{report['device']}" + (f" · 范围：{suite}" if suite else "")
+                 + (f" · 测试计划：{report['test_plan']}" if report["test_plan"] else ""))
     if report["configurations"]:
         lines.append("配置：" + "；".join(report["configurations"]))
     lines.append("")
@@ -183,7 +193,8 @@ def main() -> int:
     report = build_report(summary, manifest, built=built,
                           pattern=os.environ.get("ACCESSIBILITY_PATTERN", "(?i)accessibility"),
                           device=os.environ.get("DEVICE", ""), test_plan=os.environ.get("TEST_PLAN", ""),
-                          recorded=[p for p in recorded if p], build_log_errors=errors)
+                          recorded=[p for p in recorded if p], build_log_errors=errors,
+                          suite=os.environ.get("SUITE", ""))
     markdown = render_markdown(report, accessibility_mode=os.environ.get("ACCESSIBILITY_MODE", "warn"),
                                record_mode=os.environ.get("RECORD_SNAPSHOTS") == "true",
                                run=os.environ.get("GITHUB_RUN_NUMBER", "<run>"),

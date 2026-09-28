@@ -19,7 +19,11 @@ toolchain:
   ios: '26.4'
 
 build_test:
-  test_plan: ''                     # 用 .xctestplan 跑多种配置时填测试计划名
+  test_plan: ''                     # 只用一份 .xctestplan 时填它的名字
+  # 快线与慢线：两份都写了，PR 跑快线、合并到 main 跑慢线（只跑 UI 测试），发版复用两者的结果
+  fast_test_plan: ''                # 如 Fast：逻辑 + 迁移 + 快照，不含 UI 测试
+  full_test_plan: ''                # 如 Full：全部测试
+  ui_test_target: ''                # 如 MyAppUITests：关键流程 + 无障碍审计
   accessibility_audit: warn         # 无障碍审计先只警告；问题清干净后改成 fail
   commit_recorded_snapshots: true   # 录制快照后由 CI 提交回分支（入口文件要给 contents: write）
 

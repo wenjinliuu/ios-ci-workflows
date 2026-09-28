@@ -33,10 +33,30 @@ App 仓库根目录的 `.ios-ci.yml` 保存 App 的全部设置，所有工作�
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `test_plan` | `''` | `.xctestplan` 名；空则跑 scheme 默认的测试 |
+| `test_plan` | `''` | `.xctestplan` 名；空则跑 scheme 默认的测试。没配下面两份计划时用它 |
+| `fast_test_plan` | `''` | 快线的测试计划（逻辑 + 迁移 + 快照，不含 UI 测试） |
+| `full_test_plan` | `''` | 全部测试的计划；慢线也在它里面挑 UI 测试 target 跑 |
+| `ui_test_target` | `''` | UI 测试 target 名（关键流程 + 无障碍审计），慢线只跑它 |
 | `accessibility_audit` | `warn` | `warn` 只警告；`fail` 让无障碍问题阻断 CI |
-| `accessibility_test_pattern` | `(?i)accessibility` | 匹配测试名的正则，命中的失败算无障碍问题 |
+| `accessibility_test_pattern` | `(?i)accessibility` | 匹配测试名或失败信息的正则，命中的失败算无障碍问题（审计写在关键流程里时，失败信息以 “Accessibility audit” 开头） |
 | `commit_recorded_snapshots` | `false` | 录制快照后由 CI 把参考图提交回运行的分支；入口文件要给 `contents: write` |
+
+### 快线与慢线
+
+`fast_test_plan` 和 `full_test_plan` 都写了，Build & Test 就按触发方式自动选范围，不按改了什么挑测试：
+
+| 触发 | 范围（`suite`） | 跑什么 |
+| --- | --- | --- |
+| PR、分支上的推送 | `fast` | 快线计划 |
+| 推送到默认分支（合并到 main） | `ui` | 全部计划里只跑 `ui_test_target` |
+| 手动运行 | 入口文件传入的 `suite`，没传就是 `fast` | |
+| TestFlight 门槛 | 复用这个提交已通过的 `fast` + `ui`，查不到才跑 `full` | |
+
+两份计划都没写时，每次都跑 `test_plan` 或 scheme 的全部测试，和以前一样。
+
+样板在 `templates/Fast.xctestplan`、`templates/Full.xctestplan`；用 XcodeGen 时再加 `templates/Scripts/sync-test-plans.py`，接在生成命令后面，把 target ID 填进计划：`generate_command: xcodegen generate && python3 Scripts/sync-test-plans.py`。
+
+两份计划都建议把测试附件（录屏、截图）设为**测试成功即删除**（`systemAttachmentLifetime` / `userAttachmentLifetime` 为 `deleteOnSuccess`），产物只保留失败的附件。
 
 ## `app_icon`：App Icon
 

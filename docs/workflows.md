@@ -17,7 +17,7 @@ App 的设置都在 App 仓库的 [`.ios-ci.yml`](config.md)。每条 iOS 工作
 
 ```mermaid
 flowchart LR
-  AI[手机上的 AI 改代码并 push] --> BT[Build & Test<br/>静态检查 + 编译 + 全部测试 + 报告]
+  AI[手机上的 AI 改代码并 push] --> BT[Build & Test<br/>PR 跑快线，main 跑慢线<br/>+ 静态检查 + 报告]
   BT -->|报告| AI
   AI -.需要亲眼看.-> LP[Live Preview<br/>手机浏览器操作模拟器]
   AI -->|打 v* 标签| V
@@ -31,7 +31,7 @@ flowchart LR
 
 ## Build & Test（`build-test.yml`）
 
-CI 是测试的唯一入口，只做“自动检查”一件事：每次 push 和 PR 都把全部测试从头跑一遍，输出一份人和 AI 都能直接读的测试报告。测试以苹果官方工具为地基，第三方只补苹果没有的部分；AI 看截图做 UI 自检不可靠，只作补充。
+CI 是测试的唯一入口，只做“自动检查”一件事：每次 push 和 PR 都跑测试，输出一份人和 AI 都能直接读的测试报告。配了快线和慢线时，PR 上跑快线、合并到 main 跑慢线，发版前两条都要通过（见下面的“快线与慢线”）。测试以苹果官方工具为地基，第三方只补苹果没有的部分；AI 看截图做 UI 自检不可靠，只作补充。
 
 ### 测试分层（测试写在 App 仓库，这里负责跑和汇报）
 
@@ -42,7 +42,7 @@ CI 是测试的唯一入口，只做“自动检查”一件事：每次 push �
 | 迁移测试 | Swift Testing + 历史版本数据文件 | 升级后旧数据能否正确读取（每发一个正式版就存一份样例数据） |
 | 快照测试（视觉回归主力） | [swift-snapshot-testing](https://github.com/pointfreeco/swift-snapshot-testing) | 文字截断、元素重叠、布局错位；逐像素对比参考图 |
 | 关键流程（只写 3～5 条） | XCUITest | 核心用户路径 |
-| 无障碍审计 | `performAccessibilityAudit()`（在 XCUITest 里调用，测试名带 Accessibility） | 文字截断、对比度不足、点击区域太小、缺标签 |
+| 无障碍审计 | `performAccessibilityAudit()`（在关键流程里调用） | 文字截断、对比度不足、点击区域太小、缺标签 |
 | 多环境组合 | Test Plan（`.xctestplan`） | 浅色/深色、中/英文、大字号，同一套测试跑多种配置 |
 | 静态检查 | SwiftLint、SwiftFormat（Linux） | 代码规范、格式 |
 
@@ -60,11 +60,34 @@ MyApp.xctestplan     测试计划（可选）
 - **static-checks**（`ubuntu-latest`，不耗 macOS 分钟）：仓库根或 `workdir` 里有 `.swiftlint.yml` 就跑 SwiftLint，有 `.swiftformat` 就跑 `swiftformat --lint`，问题标在 PR 的代码行上；都没有就跳过。
 - **test**（`macos-26`）：
   1. 按 `toolchain` 选 Xcode、生成工程（缓存 Swift Packages），启动固定的模拟器；找不到就失败并列出 runner 上有的。
-  2. `xcodebuild test`（不签名）跑 scheme 或 `test_plan`，日志经 xcbeautify 整理，原始日志另存 `xcodebuild.log`。测试失败不会中断后面的步骤。
-  3. 安装并启动 App，校验 Bundle ID，截图 `launch.png`，导出 App 日志；用 XcodeBuildMCP 抓无障碍 UI 树 `ui-tree.json`（AI 写测试时的“界面地图”）。
+  2. `xcodebuild test`（不签名）按这次的范围跑对应的测试计划（见下面的“快线与慢线”），日志经 xcbeautify 整理，原始日志另存 `xcodebuild.log`。测试失败不会中断后面的步骤。
+  3. 安装并启动 App，校验 Bundle ID，截图 `launch.png`，导出 App 日志；除快线外，用 XcodeBuildMCP 抓无障碍 UI 树 `ui-tree.json`（AI 写测试时的“界面地图”）。
   4. `scripts/xcresult-report.py` 读 `Test.xcresult` 写测试报告：结论、失败的测试和原因、快照不一致（附 reference / failure / difference 图）、无障碍问题、新录制的快照。写进 job summary 和 `report/report.md`、`report/report.json`。
   5. 按下表判定通过或失败。
 - **commit-snapshots**（可选）：见下面的“快照录制”。
+
+### 快线与慢线
+
+同一份代码不在 PR 打开、每次追加提交、合并到 main 时都把全部测试跑一遍。按“什么时候跑”分层，不按“改了什么”挑测试：
+
+| 时机 | 范围 | 跑什么 |
+| --- | --- | --- |
+| PR 和分支上的每次提交 | `fast` 快线 | 编译 + 逻辑 + 迁移 + 快照 |
+| 合并到 main | `ui` 慢线 | UI 关键流程 + 无障碍审计，不重复跑快线 |
+| TestFlight | — | 这个提交的快线和慢线都已通过就复用，否则现场跑 `full` |
+| 手动运行 | 可选 `fast` / `ui` / `full` | 改了关键流程时跑 `full` |
+| 只改文档（`*.md`、`docs/**`） | 不跑 | 入口文件的 `paths-ignore` |
+
+快线和全部测试是 App 仓库里的两份测试计划，写在 `.ios-ci.yml` 的 `build_test.fast_test_plan`、`full_test_plan`；慢线在全部计划里只跑 `ui_test_target`。都没配时每次跑全部，和以前一样。测试 job 的名字带着范围（`test (fast)`、`test (ui)`），TestFlight 靠它找已有结果。
+
+无障碍审计写在关键流程里：流程走到哪一页就在那一页调用 `performAccessibilityAudit()`，不为每个页面单独启动 App。失败信息以 “Accessibility audit” 开头，报告据此把它归为无障碍问题。
+
+要注意的几点：
+
+- PR 上不跑 UI 测试。改了界面交互、关键流程或 UI 测试的 PR，合并前在分支上手动跑一次 `ui` 或 `full`。
+- main 上每次合并的慢线都会跑完（不互相取消），TestFlight 才找得到结果；短时间连续合并时，排队中的运行会被更新的那次顶掉，这些提交发版时就现场跑 `full`。
+- 只改文档的 PR 不跑 Build & Test；如果仓库把它设成了合并前必须通过的检查，这种 PR 会一直等不到结果，要么别把它设成必需，要么在 PR 里顺手改一行非文档文件。
+- 快照参考图在快线里录：手动运行时范围选 `fast` 再勾 `record_snapshots`。
 
 ### 通过 / 失败
 
@@ -88,7 +111,8 @@ MyApp.xctestplan     测试计划（可选）
 
 | 入口文件 `with:` | 默认 | 说明 |
 | --- | --- | --- |
-| `record_snapshots` | `false` | 重新录制快照（手动运行时） |
+| `record_snapshots` | `false` | 重新录制快照（手动运行时；慢线不跑快照，勾了也没用） |
+| `suite` | `''` | `fast` / `ui` / `full`；空则按触发方式自动选，没配两份计划时跑全部 |
 | `config` | `.ios-ci.yml` | 配置文件路径 |
 
 | 产物 | 保留 | 内容 |
@@ -119,7 +143,7 @@ Secrets：`AGENT_PREVIEW_PASSWORD`（必填，≥12 位）、`AGENT_PREVIEW_TUNN
 发出去的一定是测过的。只在手动触发或推送 `v*` 标签时运行。
 
 1. **verify**（Ubuntu）：用 `scripts/asc-verify.py` 通过 App Store Connect API 核对 Bundle ID 已注册、App 已创建；设置了 `icloud_container` 时读出 App ID 实际勾选的容器，供 `icloud-verified` 判断。`dry_run` 时跳过。
-2. **test**：把 Build & Test 完整跑一次作为门槛，全部通过才进入签名。发版频率低，多跑的这几分钟值得。
+2. **gate** + **test**：先查这个提交的测试结果：有一次成功的 `full`，或者成功的 `ui` 加上这个提交（或合并它的 PR 的最后一个提交）成功的 `fast`，就复用，跳过重复测试；查不到、没权限或结果不够，就把 Build & Test 的 `full` 现场跑一次，全部通过才进入签名。查询要入口文件给 `actions: read` 和 `pull-requests: read`。
 3. **release**（macOS）：生成工程（注入 `DEVELOPMENT_TEAM`）→ 版本号（build number 默认 `GITHUB_RUN_NUMBER`，可指定 `marketing_version`）→ 不签名 archive 并校验图标、Bundle ID、显示名 → 按 `entitlement_mode` 嵌入权限 → `-exportArchive` + API Key 自动签名（云端管理证书）并上传 → 上传 dSYM → 无论成败删除 runner 上的 API Key。
 4. **acceptance**（可选，`testflight.acceptance_issue: true`）：上传成功后开“<App> <版本> (<build>) 发版验收”Issue，内容是带勾选框的真机清单：固定项来自 `acceptance_checklist`，本次项来自 `acceptance_extra`。测试员在手机 GitHub App 里打勾、评论、配截图，AI 下次读它修问题。
 
@@ -133,7 +157,7 @@ Secrets：`AGENT_PREVIEW_PASSWORD`（必填，≥12 位）、`AGENT_PREVIEW_TUNN
 
 Secrets（全部必填）：`APPLE_TEAM_ID`、`APP_STORE_CONNECT_KEY_ID`、`APP_STORE_CONNECT_ISSUER_ID`、`APP_STORE_CONNECT_PRIVATE_KEY`（`.p8` 全文）。不需要手动导出 `.p12` 证书或描述文件。怎么生成见 [secrets.md](secrets.md)。
 
-只属于 TestFlight 的：版本号、Apple 注册核对、权限嵌入、签名上传、dSYM、验收 Issue。迁移测试放在 Build & Test 里每次都跑，不等到发版。
+只属于 TestFlight 的：版本号、Apple 注册核对、权限嵌入、签名上传、dSYM、验收 Issue。迁移测试在快线里，PR 上每次都跑，不等到发版。
 
 ---
 
@@ -158,3 +182,4 @@ App 仓库只保留 SVG 图层素材，由 CI 生成 Liquid Glass 的 `.icon` �
 | `build_test.commit_recorded_snapshots` | `contents: write` |
 | `app_icon.commit_previews` | `contents: write` |
 | `testflight.acceptance_issue` | `issues: write` |
+| TestFlight 复用已有的测试结果 | `actions: read`、`pull-requests: read`（不给就每次现场跑 `full`） |

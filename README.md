@@ -33,6 +33,8 @@ flowchart LR
 
 再把 [`templates/AGENTS.md`](templates/AGENTS.md) 放到 App 仓库根目录，AI 每次都会读到最关键的几条规则。
 
+测试多了、一次 Build & Test 超过 10 分钟左右时，拆成快线和慢线：PR 上只跑逻辑和快照，合并到 main 再跑 UI 流程，发版复用两者的结果。见[工作流参考](docs/workflows.md#快线与慢线)。
+
 **适用范围**：iOS App、单个主 scheme、Xcode 26、XcodeGen 生成或已提交 `.xcodeproj`。不覆盖 macOS / watchOS 目标，也不支持一个仓库里放多个 App。
 
 ## 文档

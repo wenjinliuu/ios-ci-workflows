@@ -13,6 +13,13 @@ on:
         description: Re-record snapshot references (manual runs on a branch)
         type: boolean
         default: false
+      suite:
+        description: >-
+          fast (logic, migration, snapshots), ui (UI flows and accessibility audit) or full. Empty picks by trigger when
+          build_test.fast_test_plan and full_test_plan are set (push to the default branch → ui, anything else → fast);
+          without them every run keeps the old behaviour and runs the whole scheme or build_test.test_plan.
+        type: string
+        default: ''
 
 # No workflow-level permissions: every job pins contents: read except commit-snapshots, which inherits the
 # caller's token, so only callers that turn on build_test.commit_recorded_snapshots grant contents: write.
@@ -24,18 +31,21 @@ jobs:
       contents: read
     outputs:
       config: ${{ steps.read.outputs.config }}
+      suite: ${{ steps.suite.outputs.suite }}
+      plan: ${{ steps.suite.outputs.plan }}
+      only_testing: ${{ steps.suite.outputs.only_testing }}
     steps:
       - name: Locate ios-ci-workflows
         run: |
           test -n "${{ job.workflow_repository }}" && test -n "${{ job.workflow_sha }}" || {
             echo '::error::This runner does not report job.workflow_repository / job.workflow_sha'; exit 1; }
           echo "ios-ci-workflows ${{ job.workflow_repository }}@${{ job.workflow_sha }}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: ${{ inputs.config }}
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -45,6 +55,15 @@ jobs:
         env:
           CONFIG_PATH: ${{ inputs.config }}
         run: python3 .ci-workflows/scripts/ios-ci-config.py
+      - name: Choose which tests to run
+        id: suite
+        env:
+          CONFIG: ${{ steps.read.outputs.config }}
+          REQUESTED: ${{ inputs.suite }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 .ci-workflows/scripts/resolve-suite.py
 
   static-checks:
     needs: config
@@ -53,7 +72,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: SwiftLint and SwiftFormat (only when the App repository has their config)
@@ -83,6 +102,8 @@ jobs:
           exit "$status"
 
   test:
+    # The suite in the job name lets TestFlight find earlier fast and ui results for a commit.
+    name: test (${{ needs.config.outputs.suite }})
     needs: config
     runs-on: macos-26
     timeout-minutes: 65
@@ -100,11 +121,11 @@ jobs:
       DERIVED_DATA: ${{ github.workspace }}/.build-test-derived-data
       OUT: build/test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Fetch ios-ci-workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -118,7 +139,7 @@ jobs:
           echo "ed32972e41bc3aa19588f8b0f4a0209ef70c663ad60bbf4ad84a2de73355d637  $RUNNER_TEMP/xcbeautify.zip" | shasum -a 256 -c -
           unzip -oq "$RUNNER_TEMP/xcbeautify.zip" -d "$RUNNER_TEMP/xcbeautify"
       - name: Cache Swift packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.build-test-derived-data/SourcePackages
           key: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
@@ -133,7 +154,9 @@ jobs:
         id: test
         env:
           NSUnbufferedIO: YES
-          TEST_PLAN: ${{ fromJSON(needs.config.outputs.config).build_test.test_plan }}
+          TEST_PLAN: ${{ needs.config.outputs.plan }}
+          ONLY_TESTING: ${{ needs.config.outputs.only_testing }}
+          SUITE: ${{ needs.config.outputs.suite }}
           RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
         run: |
           # The step shell runs with -e; keep going on test failures so the outputs below are written.
@@ -141,6 +164,10 @@ jobs:
           mkdir -p "$OUT"
           args=()
           if [ -n "$TEST_PLAN" ]; then args+=(-testPlan "$TEST_PLAN"); fi
+          if [ -n "$ONLY_TESTING" ]; then args+=("-only-testing:$ONLY_TESTING"); fi
+          if [ "$RECORD_SNAPSHOTS" = true ] && [ "$SUITE" = ui ]; then
+            echo '::warning::record_snapshots has no effect on the ui suite, which runs no snapshot tests'
+          fi
           # xcodebuild hands TEST_RUNNER_* variables to the test process without the prefix.
           if [ "$RECORD_SNAPSHOTS" = true ]; then export TEST_RUNNER_SNAPSHOT_TESTING_RECORD=failed; fi
           xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration Debug ${args[@]+"${args[@]}"} \
@@ -165,7 +192,8 @@ jobs:
           xcrun simctl spawn "${{ steps.prep.outputs.udid }}" log show --last 2m --style compact \
             --predicate "process == '${SCHEME}'" > "$OUT/app.log" 2>&1 || true
       - name: Capture accessibility tree with XcodeBuildMCP
-        if: ${{ !cancelled() && steps.test.outputs.built == 'true' }}
+        # Skipped on the fast suite to keep it quick; ui and full runs still capture the tree for writing UI tests.
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' && needs.config.outputs.suite != 'fast' }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -217,7 +245,8 @@ jobs:
           BUILD_LOG: build/test/xcodebuild.log
           BUILT: ${{ steps.test.outputs.built }}
           DEVICE: ${{ steps.prep.outputs.name }} (${{ steps.prep.outputs.runtime }})
-          TEST_PLAN: ${{ fromJSON(needs.config.outputs.config).build_test.test_plan }}
+          SUITE: ${{ needs.config.outputs.suite }}
+          TEST_PLAN: ${{ needs.config.outputs.plan }}
           RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
           RECORDED_LIST: ${{ runner.temp }}/recorded-snapshots.txt
           COMMIT_RECORDED: ${{ fromJSON(needs.config.outputs.config).build_test.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
@@ -226,7 +255,7 @@ jobs:
         run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/xcresult-report.py"
       - name: Upload screenshot, UI tree, test result and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-test-${{ github.run_number }}
           path: ${{ fromJSON(needs.config.outputs.config).workdir }}/build/test
@@ -234,7 +263,7 @@ jobs:
           retention-days: 7
       - name: Upload recorded snapshot references
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: recorded-snapshots-${{ github.run_number }}
           path: ${{ runner.temp }}/recorded-snapshots
@@ -284,8 +313,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: recorded-snapshots-${{ github.run_number }}

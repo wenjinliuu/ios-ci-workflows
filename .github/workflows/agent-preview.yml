@@ -54,19 +54,23 @@ on:
       accessibility_test_pattern:
         type: string
         default: '(?i)accessibility'
+      commit_recorded_snapshots:
+        type: boolean
+        default: false
     secrets:
       AGENT_PREVIEW_PASSWORD:
         required: false
       AGENT_PREVIEW_TUNNEL_TOKEN:
         required: false
 
-permissions:
-  contents: read
-
+# No workflow-level permissions: simulator and static-checks pin contents: read, while the optional
+# commit-snapshots job inherits the caller's token, so only callers that turn it on grant contents: write.
 jobs:
   simulator:
     runs-on: macos-26
     timeout-minutes: 65
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.workdir }}
@@ -234,6 +238,7 @@ jobs:
           TEST_PLAN: ${{ inputs.test_plan }}
           RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
           RECORDED_LIST: ${{ runner.temp }}/recorded-snapshots.txt
+          COMMIT_RECORDED: ${{ inputs.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
           ACCESSIBILITY_MODE: ${{ inputs.accessibility_audit }}
           ACCESSIBILITY_PATTERN: ${{ inputs.accessibility_test_pattern }}
         run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/xcresult-report.py"
@@ -414,6 +419,8 @@ jobs:
   static-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -443,3 +450,34 @@ jobs:
             (cd "$format_dir" && "$RUNNER_TEMP/swiftformat_linux" --lint --reporter github-actions-log .) || status=1
           fi
           exit "$status"
+  commit-snapshots:
+    # Commits the references a record_snapshots run produced back to the branch that was run, so an AI
+    # that cannot download artifacts can still keep them. Pushes made with the job token do not start
+    # new runs: run Build & Test again to check the code against the new references.
+    # Runs even when other tests failed, so fixing an unrelated test does not need another recording run.
+    needs: simulator
+    if: ${{ !cancelled() && needs.simulator.result != 'skipped' && inputs.record_snapshots && inputs.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: recorded-snapshots-${{ github.run_number }}
+          path: ${{ runner.temp }}/recorded-snapshots
+      - name: Commit recorded snapshot references
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/recorded-snapshots"
+          if [ ! -d "$src" ] || [ -z "$(ls -A "$src")" ]; then echo 'No snapshot references were recorded'; exit 0; fi
+          cp -R "$src/." .
+          git add -A -- ':(glob)**/__Snapshots__/**'
+          if git diff --cached --quiet; then echo 'Snapshot references unchanged'; exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q -m "Record snapshot references from Build & Test run $GITHUB_RUN_NUMBER"
+          git pull -q --rebase origin "$GITHUB_REF_NAME"
+          git push -q origin "HEAD:$GITHUB_REF_NAME" || {
+            echo "::error::Cannot push the references; grant 'contents: write' in the caller workflow"; exit 1; }
+          echo "::notice::Committed $(git diff --name-only HEAD~1 HEAD | wc -l | tr -d ' ') snapshot reference(s) to $GITHUB_REF_NAME; run Build & Test again to check against them"

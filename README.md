@@ -146,7 +146,7 @@ MyApp.xctestplan     测试计划（可选）
 | 无障碍审计失败（测试名匹配 `accessibility_test_pattern`） | 默认只警告；问题清干净后把 `accessibility_audit` 改成 `fail` |
 | `xcodebuild` 非零退出但报告里没有失败（测试进程崩溃等） | 失败 |
 
-**快照录制**：界面有意改动时，手动运行并勾选 `record_snapshots`。CI 以 `SNAPSHOT_TESTING_RECORD=failed` 运行测试，只重录不一致的快照；新录制的参考图（包括第一次运行时新增的）打包为产物 `recorded-snapshots-<run>`，按原路径解压提交回 App 仓库。快照对系统版本很敏感，参考图只在 CI 上生成。
+**快照录制**：界面有意改动时，手动运行并勾选 `record_snapshots`。CI 以 `SNAPSHOT_TESTING_RECORD=failed` 运行测试，只重录不一致的快照；新录制的参考图（包括第一次运行时新增的）打包为产物 `recorded-snapshots-<run>`。打开 `commit_recorded_snapshots` 后，CI 会把它们直接提交回这次运行的分支，AI 不需要下载产物（很多 AI 环境的网络下载不了 GitHub 产物）；没打开就要下载产物、按原路径解压提交。用任务令牌推送的提交不会触发新的运行，提交后再手动跑一次 Build & Test 确认。快照对系统版本很敏感，参考图只在 CI 上生成。
 
 **产物**（保留 7 天，录制的快照 14 天）：
 
@@ -165,6 +165,7 @@ MyApp.xctestplan     测试计划（可选）
 | `ci_repository` | | `wenjinliuu/ios-ci-workflows` | 拉取 `scripts/` 的仓库；fork 后改成自己的 |
 | `test_plan` | | `''` | 测试计划名；空则跑 scheme 默认的测试 |
 | `record_snapshots` | | `false` | 重新录制不一致的快照 |
+| `commit_recorded_snapshots` | | `false` | 录制模式下把新参考图提交回运行的分支（仅 `workflow_dispatch`），需要入口文件授予 `contents: write` |
 | `accessibility_audit` | | `warn` | `warn` 只警告，`fail` 让无障碍问题阻断 CI |
 | `accessibility_test_pattern` | | `(?i)accessibility` | 匹配测试名（如 `MyAppUITests/AccessibilityTests/testAudit()`）的正则，命中的失败算无障碍问题 |
 | `simulator_name` | | `iPhone 17 Pro` | Simulator 机型 |
@@ -345,7 +346,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write   # 只有录制快照后提交参考图的任务会写，其余任务固定只读
 
 concurrency:
   group: agent-preview-${{ github.ref }}
@@ -367,6 +368,7 @@ jobs:
       preview_minutes: ${{ fromJSON(format('{0}', inputs.preview_minutes || '12')) }}
       public_preview_url: ${{ vars.AGENT_PREVIEW_URL || '' }}
       record_snapshots: ${{ inputs.record_snapshots || false }}
+      commit_recorded_snapshots: true
       ci_revision: <SHA>
       # test_plan: MyApp        # 有 .xctestplan 时填它的名字
     secrets:
@@ -550,7 +552,7 @@ jobs:
 | 我想… | 怎么做 |
 | --- | --- |
 | 改代码并看结果 | 让 AI 修改并补测试后推送；等 **Build & Test** 完成，AI 读 job summary 或产物里的测试报告继续修 |
-| 有意改了界面 | 手动运行 **Build & Test**，勾选 `record_snapshots`；把产物 `recorded-snapshots-<run>` 里的参考图提交回仓库 |
+| 有意改了界面 | 在工作分支上手动运行 **Build & Test**，勾选 `record_snapshots`；CI 把新参考图提交回这个分支，再跑一次 Build & Test 确认变绿 |
 | 在手机上实际点一点 | 手动运行 **Build & Test**，勾选 `live_preview`；在运行中的 job 日志 notice 或 summary 里打开地址，输入密码。可点击、滑动、输入文字、查看 UI Tree 和日志 |
 | 换机型 / iOS 版本 | 手动运行时修改 `simulator_name`、`ios_runtime` |
 | 看图标效果 | 修改图标素材后，看 **App Icon** 产物里的预览图；开了 `commit_previews` 就直接打开仓库里的预览目录 |
@@ -571,7 +573,7 @@ jobs:
 - 所有密钥只存放在 App 仓库的 GitHub Secrets 中，只注入到需要它的步骤；工作流 YAML 和日志中不得出现明文 token。
 - App Store Connect `.p8` 以 `600` 权限写入 runner，job 结束前无论成败都会删除；runner 本身用完即销毁。
 - checkout 一律 `persist-credentials: false`（只有写回图标预览图的任务需要保留凭据来推送）。
-- 必需的任务固定 `contents: read`；可选任务（图标预览写回、发版门槛、验收 Issue）不声明权限、继承入口文件给的令牌，入口文件只授予自己用到的那几项。
+- 必需的任务固定 `contents: read`；可选任务（快照参考图提交、图标预览写回、发版门槛、验收 Issue）不声明权限、继承入口文件给的令牌，入口文件只授予自己用到的那几项。
 - 实时预览网关只转发模拟器画面和 HID 触控，**不会**转发 serve-sim 带 shell 能力的 `/exec-ws` 和开发者工具；公网地址开放前会自动验证这一点。
 - 预览密码 ≥12 位，每个 App 使用不同的密码、主机名和 Tunnel token。预览随 job 结束而关闭（最长 20 分钟）。
 - 预览构建不要使用生产账号或真实用户敏感数据。

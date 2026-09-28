@@ -44,7 +44,7 @@ description: 在接入了 wenjinliuu/ios-ci-workflows 的 iOS App 仓库里改�
 
 - **新功能必须带逻辑测试。** 逻辑测试最多、最便宜：排班、日期、数据存取这类规则都写成 Swift Testing 或 XCTest，边界日期用参数化测试一次覆盖。
 - **测试是累积的。** 改哪个功能就补哪个功能的测试，每次 CI 都把全部测试从头跑一遍。
-- **改界面要走快照录制。** 有意改了界面时，手动运行 Build & Test 并勾选 `record_snapshots`；跑完下载产物 `recorded-snapshots-<run>`，按原路径把图片提交回仓库，并在提交说明里写清改了哪些页面。参考图只在 CI 上生成，不在本地录制。
+- **改界面要走快照录制。** 有意改了界面时，在工作分支上手动运行 Build & Test 并勾选 `record_snapshots`。入口文件打开了 `commit_recorded_snapshots` 时，CI 会把新参考图直接提交回这个分支；否则下载产物 `recorded-snapshots-<run>`，按原路径提交。之后再手动跑一次 Build & Test（机器人的提交不会自动触发），确认变绿，并在 PR 里写清改了哪些页面。参考图只在 CI 上生成，不在本地录制。
 - **关键流程只写 3～5 条 XCUITest**，覆盖最核心的路径；无障碍审计在 XCUITest 里调用 `performAccessibilityAudit()`，测试名里带 Accessibility。
 - **删测试、改断言的预期值必须写明理由。** 不能为了让 CI 变绿而改测试。
 - 快照对机型和系统版本敏感。报告开头写着这次用的模拟器；如果 CI 提示请求的机型不存在、换成了别的机型，快照失败可能只是机型不同，先确认再改代码。

@@ -1,12 +1,26 @@
 name: Reusable CloudBase Deploy
 
+# 后端部署分测试、生产两个环境：平时（push、PR、手动）只部署测试环境，推送 v* 标签才上生产。
+# 部署前可以先跑 test_command（比如云函数的单元测试），不过就不部署。
 on:
   workflow_call:
     inputs:
-      env_id:
-        description: CloudBase environment ID
+      test_env_id:
+        description: CloudBase environment ID used for everyday deploys
         type: string
         required: true
+      prod_env_id:
+        description: CloudBase environment ID deployed only from a v* tag (or target production); empty never deploys production
+        type: string
+        default: ''
+      target:
+        description: auto (v* tag → production, anything else → test), test, or production
+        type: string
+        default: auto
+      test_command:
+        description: Command run in workdir before deploying, e.g. npm --prefix functions/api test; empty skips
+        type: string
+        default: ''
       workdir:
         description: Directory containing cloudbaserc.json / the function folders
         type: string
@@ -32,8 +46,11 @@ on:
         default: 3.8.4
     secrets:
       CLOUDBASE_API_KEY:
-        description: Environment API Key from the CloudBase console
+        description: API Key of the test environment (CloudBase console → environment → API Key)
         required: true
+      CLOUDBASE_PROD_API_KEY:
+        description: API Key of the production environment; needed only when deploying production
+        required: false
 
 permissions:
   contents: read
@@ -46,15 +63,45 @@ jobs:
       run:
         working-directory: ${{ inputs.workdir }}
         shell: bash
-    env:
-      ENV_ID: ${{ inputs.env_id }}
     steps:
+      - name: Choose the environment
+        id: target
+        working-directory: .
+        env:
+          TARGET: ${{ inputs.target }}
+          TEST_ENV_ID: ${{ inputs.test_env_id }}
+          PROD_ENV_ID: ${{ inputs.prod_env_id }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            auto) if [ "$REF_TYPE" = tag ] && [[ "$REF_NAME" == v* ]]; then target=production; else target=test; fi ;;
+            test|production) target=$TARGET ;;
+            *) echo "::error::target must be auto, test or production"; exit 1 ;;
+          esac
+          if [ "$target" = production ]; then
+            test -n "$PROD_ENV_ID" || { echo '::error::Deploying production needs prod_env_id'; exit 1; }
+            test "$PROD_ENV_ID" != "$TEST_ENV_ID" || { echo '::error::prod_env_id and test_env_id must differ'; exit 1; }
+            env_id=$PROD_ENV_ID
+          else
+            env_id=$TEST_ENV_ID
+          fi
+          echo "name=$target" >> "$GITHUB_OUTPUT"
+          echo "ENV_ID=$env_id" >> "$GITHUB_ENV"
+          echo "Deploying the $target environment ($env_id)"
+          echo "CloudBase deploy target: **$target** (\`$env_id\`)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Run tests before deploying
+        if: ${{ inputs.test_command != '' }}
+        env:
+          TEST_COMMAND: ${{ inputs.test_command }}
+        run: bash -e -c "$TEST_COMMAND"
       - name: Install CloudBase CLI
         env:
           CLI_VERSION: ${{ inputs.cli_version }}
@@ -63,10 +110,11 @@ jobs:
           tcb --version
       - name: Log in with environment API Key
         env:
-          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+          CLOUDBASE_API_KEY: ${{ steps.target.outputs.name == 'production' && secrets.CLOUDBASE_PROD_API_KEY || secrets.CLOUDBASE_API_KEY }}
+          KEY_NAME: ${{ steps.target.outputs.name == 'production' && 'CLOUDBASE_PROD_API_KEY' || 'CLOUDBASE_API_KEY' }}
         run: |
           set -euo pipefail
-          test -n "$CLOUDBASE_API_KEY" || { echo 'Set the CLOUDBASE_API_KEY secret in the calling repository'; exit 1; }
+          test -n "$CLOUDBASE_API_KEY" || { echo "::error::Set the $KEY_NAME secret in the calling repository"; exit 1; }
           tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$ENV_ID"
       - name: Deploy cloud functions
         if: ${{ inputs.functions != '' }}

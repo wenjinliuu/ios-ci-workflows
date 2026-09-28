@@ -1,0 +1,307 @@
+name: Reusable Build & Test
+
+# 自动检查：Linux 上做静态检查，macOS 上编译一次、跑完全部测试、写测试报告。
+# App 的设置都在 App 仓库的 .ios-ci.yml；这里的输入只有每次运行时才决定的开关。
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Path of the App repository's config file
+        type: string
+        default: .ios-ci.yml
+      record_snapshots:
+        description: Re-record snapshot references (manual runs on a branch)
+        type: boolean
+        default: false
+
+# No workflow-level permissions: every job pins contents: read except commit-snapshots, which inherits the
+# caller's token, so only callers that turn on build_test.commit_recorded_snapshots grant contents: write.
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      config: ${{ steps.read.outputs.config }}
+    steps:
+      - name: Locate ios-ci-workflows
+        run: |
+          test -n "${{ job.workflow_repository }}" && test -n "${{ job.workflow_sha }}" || {
+            echo '::error::This runner does not report job.workflow_repository / job.workflow_sha'; exit 1; }
+          echo "ios-ci-workflows ${{ job.workflow_repository }}@${{ job.workflow_sha }}"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ inputs.config }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - id: read
+        env:
+          CONFIG_PATH: ${{ inputs.config }}
+        run: python3 .ci-workflows/scripts/ios-ci-config.py
+
+  static-checks:
+    needs: config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: SwiftLint and SwiftFormat (only when the App repository has their config)
+        env:
+          WORKDIR: ${{ fromJSON(needs.config.outputs.config).workdir }}
+        run: |
+          set -euo pipefail
+          config_dir() { for dir in "$WORKDIR" .; do if [ -f "$dir/$1" ]; then echo "$dir"; return; fi; done; }
+          lint_dir=$(config_dir .swiftlint.yml); format_dir=$(config_dir .swiftformat)
+          if [ -z "$lint_dir" ] && [ -z "$format_dir" ]; then
+            echo '::notice::No .swiftlint.yml or .swiftformat found; static checks skipped'; exit 0
+          fi
+          status=0
+          if [ -n "$lint_dir" ]; then
+            curl -fLsS https://github.com/realm/SwiftLint/releases/download/0.65.1/swiftlint_linux_amd64.zip -o "$RUNNER_TEMP/swiftlint.zip"
+            echo "caeed6f4a679c35539ffaf124f6c4ab4a8416917f7d8796279dc52b74026059d  $RUNNER_TEMP/swiftlint.zip" | sha256sum -c -
+            unzip -oq "$RUNNER_TEMP/swiftlint.zip" swiftlint-static -d "$RUNNER_TEMP"
+            (cd "$lint_dir" && "$RUNNER_TEMP/swiftlint-static" lint --reporter github-actions-logging) || status=1
+          fi
+          if [ -n "$format_dir" ]; then
+            curl -fLsS https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.0/swiftformat_linux.zip -o "$RUNNER_TEMP/swiftformat.zip"
+            echo "b4a3cbb8c852a0baaf9adf853e221ff1dabf921a3d8957a602e0bda3af8470f1  $RUNNER_TEMP/swiftformat.zip" | sha256sum -c -
+            unzip -oq "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP"
+            chmod +x "$RUNNER_TEMP/swiftformat_linux"
+            (cd "$format_dir" && "$RUNNER_TEMP/swiftformat_linux" --lint --reporter github-actions-log .) || status=1
+          fi
+          exit "$status"
+
+  test:
+    needs: config
+    runs-on: macos-26
+    timeout-minutes: 65
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ fromJSON(needs.config.outputs.config).workdir }}
+        shell: bash
+    env:
+      CONFIG: ${{ needs.config.outputs.config }}
+      PROJECT: ${{ fromJSON(needs.config.outputs.config).project }}
+      SCHEME: ${{ fromJSON(needs.config.outputs.config).scheme }}
+      BUNDLE_ID: ${{ fromJSON(needs.config.outputs.config).bundle_id }}
+      DERIVED_DATA: ${{ github.workspace }}/.build-test-derived-data
+      OUT: build/test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch ios-ci-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - name: Install xcbeautify
+        run: |
+          set -euo pipefail
+          curl -fLsS https://github.com/cpisciotta/xcbeautify/releases/download/3.2.1/xcbeautify-3.2.1-arm64-apple-macosx.zip \
+            -o "$RUNNER_TEMP/xcbeautify.zip"
+          echo "ed32972e41bc3aa19588f8b0f4a0209ef70c663ad60bbf4ad84a2de73355d637  $RUNNER_TEMP/xcbeautify.zip" | shasum -a 256 -c -
+          unzip -oq "$RUNNER_TEMP/xcbeautify.zip" -d "$RUNNER_TEMP/xcbeautify"
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.build-test-derived-data/SourcePackages
+          key: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
+          restore-keys: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-
+      - name: Prepare Xcode, project and Simulator
+        id: prep
+        uses: ./.ci-workflows/.github/actions/prepare
+        with:
+          config: ${{ needs.config.outputs.config }}
+          simulator: 'true'
+      - name: Build and run tests without signing
+        id: test
+        env:
+          NSUnbufferedIO: YES
+          TEST_PLAN: ${{ fromJSON(needs.config.outputs.config).build_test.test_plan }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
+        run: |
+          # The step shell runs with -e; keep going on test failures so the outputs below are written.
+          set +e -uo pipefail
+          mkdir -p "$OUT"
+          args=()
+          if [ -n "$TEST_PLAN" ]; then args+=(-testPlan "$TEST_PLAN"); fi
+          # xcodebuild hands TEST_RUNNER_* variables to the test process without the prefix.
+          if [ "$RECORD_SNAPSHOTS" = true ]; then export TEST_RUNNER_SNAPSHOT_TESTING_RECORD=failed; fi
+          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" -configuration Debug ${args[@]+"${args[@]}"} \
+            -destination "platform=iOS Simulator,id=${{ steps.prep.outputs.udid }}" \
+            -derivedDataPath "$DERIVED_DATA" -resultBundlePath "$OUT/Test.xcresult" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$OUT/xcodebuild.log" \
+            | "$RUNNER_TEMP/xcbeautify/xcbeautify" --renderer github-actions
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
+          if [ -d "$APP" ]; then echo built=true >> "$GITHUB_OUTPUT"; else echo built=false >> "$GITHUB_OUTPUT"; fi
+      - name: Install, launch and capture evidence
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' }}
+        run: |
+          set -euo pipefail
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
+          test -f "$APP/Assets.car"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "$BUNDLE_ID"
+          xcrun simctl install "${{ steps.prep.outputs.udid }}" "$APP"
+          xcrun simctl launch "${{ steps.prep.outputs.udid }}" "$BUNDLE_ID"
+          sleep 4
+          xcrun simctl io "${{ steps.prep.outputs.udid }}" screenshot "$OUT/launch.png"
+          xcrun simctl spawn "${{ steps.prep.outputs.udid }}" log show --last 2m --style compact \
+            --predicate "process == '${SCHEME}'" > "$OUT/app.log" 2>&1 || true
+      - name: Capture accessibility tree with XcodeBuildMCP
+        if: ${{ !cancelled() && steps.test.outputs.built == 'true' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            npx --yes xcodebuildmcp@2.7.0 ui-automation snapshot-ui \
+              --simulator-id "${{ steps.prep.outputs.udid }}" --output json \
+              > "$OUT/ui-tree.json" || true
+            if python3 - <<'PY'
+          import json, os
+          try:
+              with open(os.path.join(os.environ['OUT'], 'ui-tree.json')) as artifact:
+                  snapshot = json.load(artifact)
+              assert not snapshot.get('didError')
+              assert snapshot.get('data', {}).get('summary', {}).get('status') != 'FAILED'
+          except (ValueError, OSError, AssertionError):
+              raise SystemExit(1)
+          PY
+            then
+              echo 'Accessibility hierarchy captured.'
+              exit 0
+            fi
+            if grep -q 'No translation object returned for simulator' "$OUT/ui-tree.json"; then
+              # AXe can lose its host bridge on iOS 26; launchd restarts this process.
+              pkill -9 -f '/usr/libexec/CoreSimulatorBridge' || true
+            fi
+            sleep 5
+          done
+          echo '::warning::XcodeBuildMCP could not capture the Simulator accessibility hierarchy; inspect ui-tree.json in the artifact.'
+          exit 1
+      - name: Collect recorded snapshot references
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/recorded-snapshots"
+          git ls-files -z --others --modified --exclude-standard -- ':(glob)**/__Snapshots__/**' ':!.ci-workflows' \
+            | while IFS= read -r -d '' file; do
+                mkdir -p "$RUNNER_TEMP/recorded-snapshots/$(dirname "$file")"
+                cp "$file" "$RUNNER_TEMP/recorded-snapshots/$file"
+                printf '%s\n' "$file"
+              done > "$RUNNER_TEMP/recorded-snapshots.txt"
+          echo "Recorded snapshot files: $(wc -l < "$RUNNER_TEMP/recorded-snapshots.txt")"
+      - name: Write test report
+        id: report
+        if: ${{ !cancelled() }}
+        env:
+          XCRESULT: build/test/Test.xcresult
+          REPORT_DIR: build/test/report
+          BUILD_LOG: build/test/xcodebuild.log
+          BUILT: ${{ steps.test.outputs.built }}
+          DEVICE: ${{ steps.prep.outputs.name }} (${{ steps.prep.outputs.runtime }})
+          TEST_PLAN: ${{ fromJSON(needs.config.outputs.config).build_test.test_plan }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
+          RECORDED_LIST: ${{ runner.temp }}/recorded-snapshots.txt
+          COMMIT_RECORDED: ${{ fromJSON(needs.config.outputs.config).build_test.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+          ACCESSIBILITY_MODE: ${{ fromJSON(needs.config.outputs.config).build_test.accessibility_audit }}
+          ACCESSIBILITY_PATTERN: ${{ fromJSON(needs.config.outputs.config).build_test.accessibility_test_pattern }}
+        run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/xcresult-report.py"
+      - name: Upload screenshot, UI tree, test result and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-test-${{ github.run_number }}
+          path: ${{ fromJSON(needs.config.outputs.config).workdir }}/build/test
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload recorded snapshot references
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recorded-snapshots-${{ github.run_number }}
+          path: ${{ runner.temp }}/recorded-snapshots
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Apply pass/fail rules
+        if: ${{ !cancelled() }}
+        env:
+          BUILT: ${{ steps.test.outputs.built }}
+          EXIT_CODE: ${{ steps.test.outputs.exit_code }}
+          TEST_FAILURES: ${{ steps.report.outputs.test_failures }}
+          SNAPSHOT_FAILURES: ${{ steps.report.outputs.snapshot_failures }}
+          ACCESSIBILITY_FAILURES: ${{ steps.report.outputs.accessibility_failures }}
+          RECORD_SNAPSHOTS: ${{ inputs.record_snapshots }}
+          ACCESSIBILITY_MODE: ${{ fromJSON(needs.config.outputs.config).build_test.accessibility_audit }}
+        run: |
+          set -euo pipefail
+          if [ "$BUILT" != true ]; then echo '::error::Build failed; see the test report and xcodebuild.log'; exit 1; fi
+          tests=${TEST_FAILURES:-0}; snapshots=${SNAPSHOT_FAILURES:-0}; audits=${ACCESSIBILITY_FAILURES:-0}
+          blocking=$tests
+          if [ "$RECORD_SNAPSHOTS" = true ]; then
+            echo "::notice::Snapshot recording run: $snapshots snapshot(s) re-recorded"
+          else
+            blocking=$(( blocking + snapshots ))
+          fi
+          if [ "$ACCESSIBILITY_MODE" = fail ]; then
+            blocking=$(( blocking + audits ))
+          elif [ "$audits" -gt 0 ]; then
+            echo "::warning::$audits accessibility audit failure(s); warning only"
+          fi
+          if [ "$blocking" -gt 0 ]; then echo "::error::$blocking blocking test failure(s); see the test report"; exit 1; fi
+          # A non-zero exit with nothing attributed (runner crash, bundle failed to load) is still a failure.
+          if [ "${EXIT_CODE:-1}" != 0 ] && [ $(( tests + snapshots + audits )) -eq 0 ]; then
+            echo "::error::xcodebuild test exited with $EXIT_CODE without reporting a test failure; see xcodebuild.log"; exit 1
+          fi
+
+  commit-snapshots:
+    # Commits the references a record_snapshots run produced back to the branch that was run, so an AI
+    # that cannot download artifacts can still keep them. Pushes made with the job token do not start
+    # new runs: run Build & Test again to check the code against the new references.
+    # Runs even when other tests failed, so fixing an unrelated test does not need another recording run.
+    needs: [config, test]
+    if: >-
+      ${{ !cancelled() && needs.test.result != 'skipped' && inputs.record_snapshots
+      && fromJSON(needs.config.outputs.config).build_test.commit_recorded_snapshots
+      && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: recorded-snapshots-${{ github.run_number }}
+          path: ${{ runner.temp }}/recorded-snapshots
+      - name: Commit recorded snapshot references
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/recorded-snapshots"
+          if [ ! -d "$src" ] || [ -z "$(ls -A "$src")" ]; then echo 'No snapshot references were recorded'; exit 0; fi
+          cp -R "$src/." .
+          git add -A -- ':(glob)**/__Snapshots__/**'
+          if git diff --cached --quiet; then echo 'Snapshot references unchanged'; exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -q -m "Record snapshot references from Build & Test run $GITHUB_RUN_NUMBER"
+          git pull -q --rebase origin "$GITHUB_REF_NAME"
+          git push -q origin "HEAD:$GITHUB_REF_NAME" || {
+            echo "::error::Cannot push the references; grant 'contents: write' in the caller workflow"; exit 1; }
+          echo "::notice::Committed $(git diff --name-only HEAD~1 HEAD | wc -l | tr -d ' ') snapshot reference(s) to $GITHUB_REF_NAME; run Build & Test again to check against them"

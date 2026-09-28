@@ -6,6 +6,8 @@ type HostedGatewayEnv = Env & {
 	CLOUDBASE_API_KEY?: string;
 	CLOUDBASE_ENV_ID?: string;
 	ALLOWED_GITHUB_LOGIN?: string;
+	// Comma-separated CloudBase MCP plugins to hide from the AI, e.g. "rag,cloudrun"
+	DISABLE_PLUGINS?: string;
 };
 
 type AuthenticatedContext = ExecutionContext & {
@@ -347,6 +349,8 @@ async function proxyHostedMcp(request: Request, env: HostedGatewayEnv): Promise<
 
 	const upstreamUrl = new URL(HOSTED_MCP_PATH, HOSTED_ORIGIN);
 	upstreamUrl.searchParams.set("env_id", envId);
+	const disabledPlugins = (env.DISABLE_PLUGINS ?? "").trim();
+	if (disabledPlugins) upstreamUrl.searchParams.set("disable_plugins", disabledPlugins);
 
 	const send = async (forceRefresh: boolean) => {
 		const token = await getCachedHostedToken(env, forceRefresh);

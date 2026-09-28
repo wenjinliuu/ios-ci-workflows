@@ -1,0 +1,238 @@
+name: Reusable Live Preview
+
+# 手动开启的实时串流：编译 App 装进模拟器，经密码网关和 Cloudflare 隧道在手机浏览器里看画面、点击、输入。
+# 它不是测试，也不跑测试；预览密码只注入这一条工作流。
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Path of the App repository's config file
+        type: string
+        default: .ios-ci.yml
+      preview_minutes:
+        description: How long the preview stays open, 1-20 minutes
+        type: number
+        default: 12
+      public_preview_url:
+        description: Fixed https origin of a named tunnel; empty uses the repository variable AGENT_PREVIEW_URL, then a random Quick Tunnel
+        type: string
+        default: ''
+    secrets:
+      AGENT_PREVIEW_PASSWORD:
+        required: true
+      AGENT_PREVIEW_TUNNEL_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      config: ${{ steps.read.outputs.config }}
+    steps:
+      - name: Locate ios-ci-workflows
+        run: |
+          test -n "${{ job.workflow_repository }}" && test -n "${{ job.workflow_sha }}" || {
+            echo '::error::This runner does not report job.workflow_repository / job.workflow_sha'; exit 1; }
+          echo "ios-ci-workflows ${{ job.workflow_repository }}@${{ job.workflow_sha }}"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ inputs.config }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - id: read
+        env:
+          CONFIG_PATH: ${{ inputs.config }}
+        run: python3 .ci-workflows/scripts/ios-ci-config.py
+
+  preview:
+    needs: config
+    runs-on: macos-26
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: ${{ fromJSON(needs.config.outputs.config).workdir }}
+        shell: bash
+    env:
+      PROJECT: ${{ fromJSON(needs.config.outputs.config).project }}
+      SCHEME: ${{ fromJSON(needs.config.outputs.config).scheme }}
+      BUNDLE_ID: ${{ fromJSON(needs.config.outputs.config).bundle_id }}
+      DERIVED_DATA: ${{ github.workspace }}/.live-preview-derived-data
+      OUT: build/live-preview
+    steps:
+      - name: Check preview settings
+        working-directory: .
+        env:
+          PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
+          PREVIEW_MINS: ${{ inputs.preview_minutes }}
+        run: |
+          set -euo pipefail
+          test "${#PREVIEW_PASSWORD}" -ge 12 || { echo '::error::Set AGENT_PREVIEW_PASSWORD (at least 12 characters) in this App repository'; exit 1; }
+          test "$PREVIEW_MINS" -ge 1 && test "$PREVIEW_MINS" -le 20 || { echo '::error::preview_minutes must be 1-20'; exit 1; }
+          uname -m | grep -q arm64
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch ios-ci-workflows
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.live-preview-derived-data/SourcePackages
+          key: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
+          restore-keys: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-
+      - name: Prepare Xcode, project and Simulator
+        id: prep
+        uses: ./.ci-workflows/.github/actions/prepare
+        with:
+          config: ${{ needs.config.outputs.config }}
+          simulator: 'true'
+      - name: Build, install and launch the App
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          xcodebuild build -project "$PROJECT" -scheme "$SCHEME" -configuration Debug \
+            -destination "platform=iOS Simulator,id=${{ steps.prep.outputs.udid }}" \
+            -derivedDataPath "$DERIVED_DATA" CODE_SIGNING_ALLOWED=NO > "$OUT/xcodebuild.log" 2>&1 || {
+            tail -80 "$OUT/xcodebuild.log"; exit 1; }
+          APP="$DERIVED_DATA/Build/Products/Debug-iphonesimulator/${SCHEME}.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "$BUNDLE_ID"
+          xcrun simctl install "${{ steps.prep.outputs.udid }}" "$APP"
+          xcrun simctl launch "${{ steps.prep.outputs.udid }}" "$BUNDLE_ID"
+      - name: Run authenticated browser session
+        env:
+          PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
+          PREVIEW_MINS: ${{ inputs.preview_minutes }}
+          PREVIEW_NAMED_URL: ${{ inputs.public_preview_url || vars.AGENT_PREVIEW_URL || '' }}
+          PREVIEW_TUNNEL_TOKEN: ${{ secrets.AGENT_PREVIEW_TUNNEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/preview-tools" --no-save --no-audit --no-fund \
+            serve-sim@0.1.46 http-proxy@1.18.1 ws@8.21.0
+          SIM_TOOLS="$RUNNER_TEMP/preview-tools/node_modules"
+          "$SIM_TOOLS/.bin/serve-sim" "${{ steps.prep.outputs.name }}" --host 127.0.0.1 --port 3200 \
+            > "$OUT/serve-sim.log" 2>&1 &
+          for i in {1..30}; do curl -fsS http://127.0.0.1:3200/ >/dev/null && break || sleep 2; done
+          curl -fsS http://127.0.0.1:3200/ >/dev/null
+          cp "$GITHUB_WORKSPACE/.ci-workflows/scripts/preview-proxy.cjs" "$RUNNER_TEMP/preview-proxy.cjs"
+          NODE_PATH="$SIM_TOOLS" PREVIEW_PASSWORD="$PREVIEW_PASSWORD" \
+            SIM_UDID="${{ steps.prep.outputs.udid }}" APP_SCHEME="$SCHEME" \
+            SERVE_SIM_BIN="$SIM_TOOLS/.bin/serve-sim" node "$RUNNER_TEMP/preview-proxy.cjs" \
+            > "$OUT/proxy.log" 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3210/ >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3210/ >/dev/null
+          python3 - <<'PY'
+          import os, time, urllib.error, urllib.parse, urllib.request
+          base = 'http://127.0.0.1:3210'
+          data = urllib.parse.urlencode({'password': os.environ['PREVIEW_PASSWORD']}).encode()
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, fp, code, msg, headers, newurl):
+                  return None
+          opener = urllib.request.build_opener(NoRedirect)
+          try:
+              opener.open(urllib.request.Request(base + '/login', data=data), timeout=10)
+          except urllib.error.HTTPError as response:
+              assert response.code == 303, response.code
+              cookie = response.headers['Set-Cookie'].split(';')[0]
+          assert cookie.startswith('preview_session=')
+          def get(path):
+              return urllib.request.urlopen(urllib.request.Request(base + path, headers={'Cookie': cookie}), timeout=15)
+          with get('/') as response:
+              assert b'iOS Agent Preview' in response.read()
+          try:
+              get('/exec-ws')
+              raise AssertionError('Shell-capable endpoint is public')
+          except urllib.error.HTTPError as response:
+              assert response.code == 404, response.code
+          for attempt in range(3):
+              try:
+                  with get('/helper/stream.mjpeg?raw=1') as response:
+                      assert response.status == 200
+                      # serve-sim prefixes even raw JPEG frames with a MIME frame header.
+                      assert b'\xff\xd8' in response.read(4096), 'No JPEG frame received'
+                  break
+              except (OSError, AssertionError):
+                  if attempt == 2: raise
+                  time.sleep(3)
+          print('Preview authentication, shell isolation and simulator frame verified')
+          PY
+          curl -fLsS https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-darwin-arm64.tgz \
+            -o "$RUNNER_TEMP/cloudflared.tgz"
+          echo '587c2cfb1c230fe36c7fa7727da78be459dae028cabe8c001291999350f07095  '"$RUNNER_TEMP/cloudflared.tgz" | shasum -a 256 -c -
+          tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C "$RUNNER_TEMP" cloudflared
+          PUBLIC_READY=false
+          if [ -n "$PREVIEW_NAMED_URL" ] || [ -n "$PREVIEW_TUNNEL_TOKEN" ]; then
+            test -n "$PREVIEW_NAMED_URL" && test -n "$PREVIEW_TUNNEL_TOKEN" || {
+              echo '::error::Set both the AGENT_PREVIEW_URL variable and the AGENT_PREVIEW_TUNNEL_TOKEN secret for a named tunnel'; exit 1;
+            }
+            URL="$PREVIEW_NAMED_URL"
+            printf '%s' "$PREVIEW_TUNNEL_TOKEN" > "$RUNNER_TEMP/preview-tunnel-token"
+            chmod 600 "$RUNNER_TEMP/preview-tunnel-token"
+            "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate run --token-file "$RUNNER_TEMP/preview-tunnel-token" \
+              > "$OUT/tunnel.log" 2>&1 &
+            for attempt in {1..36}; do
+              if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+                node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+                PUBLIC_READY=true
+                break
+              fi
+              sleep 5
+            done
+          else
+            for tunnel_attempt in 1 2 3 4; do
+              "$RUNNER_TEMP/cloudflared" tunnel --no-autoupdate --url http://127.0.0.1:3210 \
+                > "$OUT/tunnel.log" 2>&1 &
+              TUNNEL_PID=$!
+              URL=""
+              for i in {1..40}; do
+                URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$OUT/tunnel.log" | head -1 || true)
+                if [ -n "$URL" ]; then break; fi
+                sleep 2
+              done
+              if [ -n "$URL" ]; then
+                for attempt in {1..12}; do
+                  if PREVIEW_URL="$URL" NODE_PATH="$SIM_TOOLS" \
+                    node "$GITHUB_WORKSPACE/.ci-workflows/scripts/check-public-preview.cjs"; then
+                    PUBLIC_READY=true
+                    break
+                  fi
+                  sleep 5
+                done
+              fi
+              if [ "$PUBLIC_READY" = true ]; then break; fi
+              cp "$OUT/tunnel.log" "$OUT/tunnel-attempt-${tunnel_attempt}.log"
+              kill "$TUNNEL_PID" || true
+              wait "$TUNNEL_PID" || true
+            done
+          fi
+          test "$PUBLIC_READY" = true
+          echo "### Live Preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "Open: $URL (password: repository secret AGENT_PREVIEW_PASSWORD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Expires when this job ends, within $PREVIEW_MINS minutes." >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Live Preview::Open $URL while this job is running; use the repository preview password."
+          sleep "$((PREVIEW_MINS*60))"
+      - name: Upload preview logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-preview-${{ github.run_number }}
+          path: ${{ fromJSON(needs.config.outputs.config).workdir }}/build/live-preview
+          if-no-files-found: ignore
+          retention-days: 3

@@ -1,0 +1,25 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      record_snapshots:
+        description: 重新录制快照参考图（有意改了界面时勾选）
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # 只有录制快照后提交参考图的任务会写；不用这个功能就改成 read
+
+concurrency:
+  group: build-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/build-test.yml@<SHA> # v1.0.0
+    with:
+      record_snapshots: ${{ inputs.record_snapshots || false }}

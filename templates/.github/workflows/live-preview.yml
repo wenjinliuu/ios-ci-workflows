@@ -1,0 +1,25 @@
+name: Live Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_minutes:
+        description: 预览开多久（1-20 分钟）
+        type: number
+        default: 12
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-preview
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/live-preview.yml@<SHA> # v1.0.0
+    with:
+      preview_minutes: ${{ inputs.preview_minutes }}
+    secrets:
+      AGENT_PREVIEW_PASSWORD: ${{ secrets.AGENT_PREVIEW_PASSWORD }}
+      AGENT_PREVIEW_TUNNEL_TOKEN: ${{ secrets.AGENT_PREVIEW_TUNNEL_TOKEN }}

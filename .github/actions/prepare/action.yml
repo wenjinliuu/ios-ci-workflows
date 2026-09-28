@@ -1,0 +1,64 @@
+name: Prepare iOS project
+description: >-
+  Internal step shared by the ios-ci-workflows reusable workflows: select the pinned Xcode, install the
+  pinned XcodeGen when the project uses it, sync the icon, generate the project and optionally boot the
+  pinned Simulator. Workflows fetch this repository into .ci-workflows and call it from there.
+inputs:
+  config:
+    description: JSON from scripts/ios-ci-config.py
+    required: true
+  simulator:
+    description: Select and boot the Simulator from toolchain.simulator / toolchain.ios
+    default: 'false'
+  development_team:
+    description: Passed to generate_command as DEVELOPMENT_TEAM (TestFlight only)
+    default: ''
+outputs:
+  udid:
+    value: ${{ steps.sim.outputs.udid }}
+  name:
+    value: ${{ steps.sim.outputs.name }}
+  runtime:
+    value: ${{ steps.sim.outputs.runtime }}
+runs:
+  using: composite
+  steps:
+    - uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: ${{ fromJSON(inputs.config).toolchain.xcode }}
+    - name: Install pinned XcodeGen
+      if: ${{ contains(fromJSON(inputs.config).generate_command, 'xcodegen') }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fLsS https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip -o "$RUNNER_TEMP/xcodegen.zip"
+        echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+        unzip -oq "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+    - name: Sync icon and generate project
+      shell: bash
+      working-directory: ${{ fromJSON(inputs.config).workdir }}
+      env:
+        SYNC_COMMAND: ${{ fromJSON(inputs.config).sync_command }}
+        GENERATE_COMMAND: ${{ fromJSON(inputs.config).generate_command }}
+        DEVELOPMENT_TEAM: ${{ inputs.development_team }}
+      run: |
+        set -euo pipefail
+        xcodebuild -version
+        if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then xcodegen --version; fi
+        bash -e -c "$SYNC_COMMAND"
+        bash -e -c "$GENERATE_COMMAND"
+    - name: Select the pinned Simulator
+      id: sim
+      if: ${{ inputs.simulator == 'true' }}
+      shell: bash
+      env:
+        SIMULATOR: ${{ fromJSON(inputs.config).toolchain.simulator }}
+        IOS_VERSION: ${{ fromJSON(inputs.config).toolchain.ios }}
+      run: python3 "$GITHUB_WORKSPACE/.ci-workflows/scripts/select-simulator.py"
+    - name: Boot the Simulator
+      if: ${{ inputs.simulator == 'true' }}
+      shell: bash
+      run: |
+        xcrun simctl boot "${{ steps.sim.outputs.udid }}"
+        xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b

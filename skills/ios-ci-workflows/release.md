@@ -3,8 +3,10 @@
 ## 发版
 
 - 推送 `v*` 标签（如 `v1.2.0`），或手动运行 **TestFlight**。
-- 流程：verify（核对 Apple 注册）→ test（完整跑一次 Build & Test，没通过就不签名）→ release（签名上传）→ acceptance（开验收 Issue）。
-- 第一次接入或 Apple 侧有改动时：先勾 `lookup_only` 核对 Bundle ID 和 App 已注册；再勾 `dry_run` 确认测试门槛和打包都能过。
+- 流程：verify（核对 Apple 注册）→ 测试门槛 → release（签名上传）→ acceptance（开验收 Issue）。
+- 测试门槛先查这个提交已有的结果：main 上的慢线通过、合并它的 PR 上的快线通过（或这个提交跑过一次 `full`），就复用，不再重测；查不到才现场跑一次全部测试，没通过就不签名。
+- 所以发版前先确认要发的提交在 main 上的 Build & Test（慢线）是绿的；是红的就先修，不要靠发版时的现场测试碰运气。
+- 第一次接入或 Apple 侧有改动时：先勾 `lookup_only` 核对 Bundle ID 和 App 已注册；再勾 `dry_run` 确认测试门槛和打包都能过（summary 里会写这次是复用了已有结果，还是现场跑了全部测试）。
 - build number 冲突时手动运行并指定 `build_number`；版本号用 `marketing_version`。
 
 ## 验收清单

@@ -15,6 +15,18 @@ runner 镜像升级了，固定的模拟器不在了。报错下面列着 runner
 **无障碍审计失败但 CI 是绿的**
 `accessibility_audit` 默认 `warn`，只警告不阻断；问题清干净后改成 `fail`。
 
+**PR 上是绿的，合并后 main 红了**
+配了快线和慢线时，PR 上只跑快线，UI 关键流程和无障碍审计在合并后才跑。改了界面交互或 UI 测试的 PR，合并前手动跑一次 Build & Test 的 `ui`。main 红了就先修，别发版。
+
+**只改文档的 PR 没有 Build & Test**
+入口文件用 `paths-ignore` 跳过了 `*.md` 和 `docs/**`。若仓库把 Build & Test 设为合并前必需的检查，这种 PR 会一直等待，要么取消“必需”，要么别在只改文档的 PR 上依赖它。
+
+**手动运行把正在跑的 Build & Test 取消了**
+同一个分支上新运行会取消旧运行。等上一个跑完再手动开下一个。
+
+**TestFlight 没复用已有结果，又跑了一遍全部测试**
+summary 的“测试门槛”一节写着原因：这个提交在 main 上没有成功的慢线（连续合并时排队的运行会被顶掉），合并它的 PR 上没有成功的快线，或者入口文件缺 `actions: read` / `pull-requests: read`。
+
 **录制快照后 CI 没有再跑**
 用任务令牌推送的提交不会触发新运行，手动再跑一次 Build & Test。提交失败报 `grant 'contents: write'` 时，入口文件缺这个权限。
 
@@ -31,7 +43,7 @@ job 结束后地址即失效，请在 job 还在运行时打开。Quick Tunnel �
 固定域名的两项必须同时配置，或同时删除以回到 Quick Tunnel。
 
 **TestFlight 没有上传，test 那一步红了**
-发版前会完整跑一次 Build & Test，没通过就不签名。先按测试报告修好。
+测试门槛没找到可复用的结果，现场跑的全部测试没通过，就不签名。先按测试报告修好。
 
 **TestFlight 导出签名失败**
 检查 API Key 角色是否有权限管理证书和描述文件、`APPLE_TEAM_ID` 是否正确、App 是否已在 App Store Connect 创建、Bundle ID 的能力是否和 entitlements 一致。

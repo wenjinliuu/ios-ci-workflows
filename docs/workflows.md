@@ -17,7 +17,7 @@ App 的设置都在 App 仓库的 [`.ios-ci.yml`](config.md)。每条 iOS 工作
 
 ```mermaid
 flowchart LR
-  AI[手机上的 AI 改代码并 push] --> BT[Build & Test<br/>静态检查 + 编译 + 全部测试 + 报告]
+  AI[手机上的 AI 改代码并 push] --> BT[Build & Test<br/>PR 跑快线，main 跑慢线<br/>+ 静态检查 + 报告]
   BT -->|报告| AI
   AI -.需要亲眼看.-> LP[Live Preview<br/>手机浏览器操作模拟器]
   AI -->|打 v* 标签| V
@@ -42,7 +42,7 @@ CI 是测试的唯一入口，只做“自动检查”一件事：每次 push �
 | 迁移测试 | Swift Testing + 历史版本数据文件 | 升级后旧数据能否正确读取（每发一个正式版就存一份样例数据） |
 | 快照测试（视觉回归主力） | [swift-snapshot-testing](https://github.com/pointfreeco/swift-snapshot-testing) | 文字截断、元素重叠、布局错位；逐像素对比参考图 |
 | 关键流程（只写 3～5 条） | XCUITest | 核心用户路径 |
-| 无障碍审计 | `performAccessibilityAudit()`（在 XCUITest 里调用，测试名带 Accessibility） | 文字截断、对比度不足、点击区域太小、缺标签 |
+| 无障碍审计 | `performAccessibilityAudit()`（在关键流程里调用） | 文字截断、对比度不足、点击区域太小、缺标签 |
 | 多环境组合 | Test Plan（`.xctestplan`） | 浅色/深色、中/英文、大字号，同一套测试跑多种配置 |
 | 静态检查 | SwiftLint、SwiftFormat（Linux） | 代码规范、格式 |
 
@@ -81,6 +81,13 @@ MyApp.xctestplan     测试计划（可选）
 快线和全部测试是 App 仓库里的两份测试计划，写在 `.ios-ci.yml` 的 `build_test.fast_test_plan`、`full_test_plan`；慢线在全部计划里只跑 `ui_test_target`。都没配时每次跑全部，和以前一样。测试 job 的名字带着范围（`test (fast)`、`test (ui)`），TestFlight 靠它找已有结果。
 
 无障碍审计写在关键流程里：流程走到哪一页就在那一页调用 `performAccessibilityAudit()`，不为每个页面单独启动 App。失败信息以 “Accessibility audit” 开头，报告据此把它归为无障碍问题。
+
+要注意的几点：
+
+- PR 上不跑 UI 测试。改了界面交互、关键流程或 UI 测试的 PR，合并前在分支上手动跑一次 `ui` 或 `full`。
+- main 上每次合并的慢线都会跑完（不互相取消），TestFlight 才找得到结果；短时间连续合并时，排队中的运行会被更新的那次顶掉，这些提交发版时就现场跑 `full`。
+- 只改文档的 PR 不跑 Build & Test；如果仓库把它设成了合并前必须通过的检查，这种 PR 会一直等不到结果，要么别把它设成必需，要么在 PR 里顺手改一行非文档文件。
+- 快照参考图在快线里录：手动运行时范围选 `fast` 再勾 `record_snapshots`。
 
 ### 通过 / 失败
 
@@ -150,7 +157,7 @@ Secrets：`AGENT_PREVIEW_PASSWORD`（必填，≥12 位）、`AGENT_PREVIEW_TUNN
 
 Secrets（全部必填）：`APPLE_TEAM_ID`、`APP_STORE_CONNECT_KEY_ID`、`APP_STORE_CONNECT_ISSUER_ID`、`APP_STORE_CONNECT_PRIVATE_KEY`（`.p8` 全文）。不需要手动导出 `.p12` 证书或描述文件。怎么生成见 [secrets.md](secrets.md)。
 
-只属于 TestFlight 的：版本号、Apple 注册核对、权限嵌入、签名上传、dSYM、验收 Issue。迁移测试放在 Build & Test 里每次都跑，不等到发版。
+只属于 TestFlight 的：版本号、Apple 注册核对、权限嵌入、签名上传、dSYM、验收 Issue。迁移测试在快线里，PR 上每次都跑，不等到发版。
 
 ---
 

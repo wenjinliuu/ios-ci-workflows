@@ -36,4 +36,4 @@ Quick Tunnel 在你的网络下经常解析不了，或者想要固定地址、�
 
 ## AI 实时操作（暂缓）
 
-AI 通过 MCP 截图、点击、滑动，你同时看串流。AI 是“截图 → 思考 → 点击”逐步进行，看不到动画掉帧；探路所需的“界面地图”已由每次 Build & Test 的 `ui-tree.json` 提供，目前没有建。以后需要时，用 agent-device 以代理模式挂在同一条隧道上，并参照 [native-sim](https://github.com/bidah/native-sim) 关掉服务空闲、测试进程空闲、设备租约三个默认 5 分钟的超时，加守护进程自动重启。
+AI 通过 MCP 截图、点击、滑动，你同时看串流。AI 是“截图 → 思考 → 点击”逐步进行，看不到动画掉帧；探路所需的“界面地图”已由 Build & Test 慢线和全部测试运行里的 `ui-tree.json` 提供，目前没有建。以后需要时，用 agent-device 以代理模式挂在同一条隧道上，并参照 [native-sim](https://github.com/bidah/native-sim) 关掉服务空闲、测试进程空闲、设备租约三个默认 5 分钟的超时，加守护进程自动重启。

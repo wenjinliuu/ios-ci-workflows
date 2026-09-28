@@ -1,0 +1,42 @@
+{
+  "configurations": [
+    {
+      "id": "2A1F9D5B-4C3E-4F70-8B2C-8D6E4F3A2B10",
+      "name": "Default",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "systemAttachmentLifetime": "deleteOnSuccess",
+    "userAttachmentLifetime": "deleteOnSuccess",
+    "targetForVariableExpansion": {
+      "containerPath": "container:MyApp.xcodeproj",
+      "identifier": "000000000000000000000000",
+      "name": "MyApp"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:MyApp.xcodeproj",
+        "identifier": "000000000000000000000000",
+        "name": "MyAppTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:MyApp.xcodeproj",
+        "identifier": "000000000000000000000000",
+        "name": "MyAppSnapshotTests"
+      }
+    },
+    {
+      "target": {
+        "containerPath": "container:MyApp.xcodeproj",
+        "identifier": "000000000000000000000000",
+        "name": "MyAppUITests"
+      }
+    }
+  ],
+  "version": 1
+}

@@ -43,13 +43,15 @@
 
 ## 写测试
 
-| 层 | 写法 | 数量 |
-| --- | --- | --- |
-| 逻辑测试 | Swift Testing（或 XCTest）；边界日期用参数化测试一次覆盖；用 swift-dependencies 固定“今天” | 最多 |
-| 迁移测试 | 加载 `Fixtures/` 里每个历史版本的数据文件，检查读出来的内容 | 每发一个正式版加一份数据 |
-| 快照测试 | swift-snapshot-testing，固定日期和示例数据，参考图在 `__Snapshots__` | 关键组件和页面 |
-| 关键流程 | XCUITest，用示例数据启动，不读写用户数据 | 只写 3～5 条 |
-| 无障碍审计 | 写在关键流程里：流程走到哪一页，就在那一页调用 `performAccessibilityAudit()`，不为每个页面单独启动 App | 每个页面至少被一条流程走到并审计一次 |
+测什么、放哪一层、怎么写、什么时候能删，见 [testing.md](testing.md)；要加测试前先查 App 仓库的 `TESTING.md`。下面是各层在这套 CI 里的具体写法。
+
+| 层 | 写法 |
+| --- | --- |
+| 逻辑测试 | Swift Testing（或 XCTest）；同类情况用参数化测试合并；“现在”作为参数传入，测试里传固定时间 |
+| 迁移测试 | 加载 `Fixtures/` 里每个历史版本的数据文件，检查读出来的内容；每发一个正式版加一份数据 |
+| 快照测试 | swift-snapshot-testing，固定日期和示例数据，参考图在 `__Snapshots__` |
+| 关键流程 | XCUITest，用示例数据启动，不读写用户数据；有哪些条由 `TESTING.md` 定 |
+| 无障碍审计 | 写在关键流程里：流程走到哪一页，就在那一页调用 `performAccessibilityAudit()`，不为每个页面单独启动 App；每个主要页面至少被一条流程走到并审计一次 |
 
 无障碍审计的写法：在审计的问题处理闭包里用 `XCTFail("Accessibility audit（页面名）：问题 — 元素")` 记录每个问题并返回 `true`，失败信息以 “Accessibility audit” 开头，CI 才能把它归为无障碍问题；写上元素的标签和位置，报告里就能直接定位。元素多的页面在慢 runner 上审计可能超时（“Audit failed to complete in time”）：先把问题收集起来、审计完成后再逐条 `XCTFail`，超时就重跑一次，这样重跑不会把同一个问题记两遍（样例见 CalenEase 的 `KeyFlowTests.auditAccessibility`）。新加一个页面或弹窗时，让某条关键流程走到它并审计。
 

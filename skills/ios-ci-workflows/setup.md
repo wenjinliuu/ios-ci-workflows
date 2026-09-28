@@ -41,9 +41,11 @@
 - 入口文件的 `permissions` 按用到的功能给：录快照提交回分支、提交图标预览要 `contents: write`，验收 Issue 要 `issues: write`，TestFlight 复用已有测试结果要 `actions: read` 和 `pull-requests: read`；不用就去掉。
 - Secrets 只能由用户在 GitHub 网页上添加（Settings → Secrets and variables → Actions）。把要加哪几项、从哪里来（中央仓库 `docs/secrets.md`）告诉用户，不要让用户把密钥发给你。
 
-## 4. `AGENTS.md`
+## 4. `AGENTS.md` 和 `TESTING.md`
 
 把 `templates/AGENTS.md` 复制到 App 仓库根目录（已有就把那几条合并进去）。用 Claude 的仓库可以再放一个内容相同的 `CLAUDE.md`。
+
+再按 [testing.md](testing.md) 的“首次接入”盘点现有代码和测试，写 `TESTING.md` 初稿放在根目录，请用户确认关键流程和主要页面后，再按缺口补测试。
 
 ## 5. 验证
 

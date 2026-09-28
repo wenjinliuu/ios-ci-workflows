@@ -46,7 +46,7 @@ CI 是测试的唯一入口，只做“自动检查”一件事：每次 push �
 | 多环境组合 | Test Plan（`.xctestplan`） | 浅色/深色、中/英文、大字号，同一套测试跑多种配置 |
 | 静态检查 | SwiftLint、SwiftFormat（Linux） | 代码规范、格式 |
 
-能用逻辑测试验证的不写成 UI 测试；写测试的几条约束见 Skill 的 [testing.md](../skills/ios-ci-workflows/testing.md)。
+能用逻辑测试验证的不写成 UI 测试：逻辑测试毫秒级，UI 测试每条几十秒。
 
 App 仓库的推荐布局：
 

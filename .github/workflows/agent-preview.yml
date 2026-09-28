@@ -453,8 +453,9 @@ jobs:
     # Commits the references a record_snapshots run produced back to the branch that was run, so an AI
     # that cannot download artifacts can still keep them. Pushes made with the job token do not start
     # new runs: run Build & Test again to check the code against the new references.
+    # Runs even when other tests failed, so fixing an unrelated test does not need another recording run.
     needs: simulator
-    if: ${{ inputs.record_snapshots && inputs.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
+    if: ${{ !cancelled() && needs.simulator.result != 'skipped' && inputs.record_snapshots && inputs.commit_recorded_snapshots && github.event_name == 'workflow_dispatch' && github.ref_type == 'branch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

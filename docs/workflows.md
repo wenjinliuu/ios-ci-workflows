@@ -41,12 +41,12 @@ CI 是测试的唯一入口，只做“自动检查”一件事：每次 push �
 | 时间控制 | 把“现在”作为参数传入（也可用 [swift-dependencies](https://github.com/pointfreeco/swift-dependencies)） | 把“今天”固定成春节、闰月、跨年等边界日期 |
 | 迁移测试 | Swift Testing + 历史版本数据文件 | 升级后旧数据能否正确读取（每发一个正式版就存一份样例数据） |
 | 快照测试（视觉回归主力） | [swift-snapshot-testing](https://github.com/pointfreeco/swift-snapshot-testing) | 文字截断、元素重叠、布局错位；逐像素对比参考图 |
-| 关键流程 | XCUITest | 核心用户路径；有哪些条由 AI 按 App 判断、开发者确认 |
+| 关键流程 | XCUITest | 核心用户路径 |
 | 无障碍审计 | `performAccessibilityAudit()`（在关键流程里调用） | 文字截断、对比度不足、点击区域太小、缺标签 |
 | 多环境组合 | Test Plan（`.xctestplan`） | 浅色/深色、中/英文、大字号，同一套测试跑多种配置 |
 | 静态检查 | SwiftLint、SwiftFormat（Linux） | 代码规范、格式 |
 
-每项检查放在能验证它的最便宜的一层；测什么、怎么写、什么时候能删，见 Skill 的 [testing.md](../skills/ios-ci-workflows/testing.md)。每个 App 在根目录的 `TESTING.md` 里记录自己测了什么。
+能用逻辑测试验证的不写成 UI 测试；写测试的几条约束见 Skill 的 [testing.md](../skills/ios-ci-workflows/testing.md)。
 
 App 仓库的推荐布局：
 

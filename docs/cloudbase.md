@@ -9,14 +9,26 @@
 | CLI 部署工作流 | [`.github/workflows/cloudbase-deploy.yml`](../.github/workflows/cloudbase-deploy.yml) | 可复用：用环境 API Key 登录 `tcb`，部署云函数 / 静态托管 |
 | 网关代码检查 | [`.github/workflows/cloudbase-mcp-gateway.yml`](../.github/workflows/cloudbase-mcp-gateway.yml) | 修改网关代码时自动类型检查、lint、打包 |
 
-## 1. 一把钥匙：环境 API Key
+## 0. 两个环境：测试和生产
 
-云开发控制台 → 你的环境 → **API Key 管理** → 新建。这一个 Key 同时用于：
+后端分**测试**、**生产**两个 CloudBase 环境（两个 `env_id`）：
+
+| | 测试环境 | 生产环境 |
+| --- | --- | --- |
+| CLI 部署 | push、PR、手动运行时自动部署 | 只在推送 `v*` 标签时部署 |
+| AI 通过 MCP 连接 | 默认就连这个 | 不连；需要排查生产问题时另建只读的连接 |
+| API Key | `CLOUDBASE_API_KEY` | `CLOUDBASE_PROD_API_KEY` |
+
+MCP 有写权限（删数据、改云函数、改安全规则），所以 AI 默认只连测试环境。
+
+## 1. 钥匙：环境 API Key
+
+云开发控制台 → 你的环境 → **API Key 管理** → 新建。API Key 属于某一个环境，测试、生产各建各的。测试环境的 Key 同时用于：
 
 - MCP 网关换取官方 Hosted MCP token（Worker Secret `CLOUDBASE_API_KEY`）
 - CLI 登录：`tcb login --cloudbase-api-key <key> -e <envId>`（Actions Secret `CLOUDBASE_API_KEY`）
 
-建议网关和 CI 各建一个 Key，方便单独吊销。另一种凭据是腾讯云 CAM 的 SecretId / SecretKey（整个腾讯云账号级别，权限更大），只在需要时使用。
+建议网关和 CI 各建一个 Key，方便单独吊销。生产环境的 Key 只放在 App 仓库的 Actions Secret `CLOUDBASE_PROD_API_KEY`，不给网关。另一种凭据是腾讯云 CAM 的 SecretId / SecretKey（整个腾讯云账号级别，权限更大），只在需要时使用。
 
 ## 2. 让 AI 操作后端：官方 MCP 的三种接法
 
@@ -102,26 +114,32 @@ name: Deploy CloudBase
 on:
   push:
     branches: [main]
+    tags: ['v*']
     paths: ['cloudfunctions/**', 'web/dist/**']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   deploy:
-    uses: wenjinliuu/ios-ci-workflows/.github/workflows/cloudbase-deploy.yml@<SHA>
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/cloudbase-deploy.yml@<SHA> # v1.0.0
     with:
-      env_id: your-env-id
-      workdir: .
+      test_env_id: your-test-env-id
+      prod_env_id: your-prod-env-id       # 推 v* 标签时部署到这里
+      test_command: npm --prefix cloudfunctions/getDraws test   # 可选：部署前先跑云函数测试
       functions: getDraws saveTicket      # 或 all；留空则跳过
       functions_dir: cloudfunctions       # 每个函数一个子目录；留空则按 cloudbaserc.json
       hosting_source: ''                  # 例如 web/dist；留空则跳过
     secrets:
       CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+      CLOUDBASE_PROD_API_KEY: ${{ secrets.CLOUDBASE_PROD_API_KEY }}
 ```
 
 | 输入 | 默认 | 说明 |
 | --- | --- | --- |
-| `env_id` | 必填 | CloudBase 环境 ID |
+| `test_env_id` | 必填 | 测试环境 ID，平时都部署到这里 |
+| `prod_env_id` | `''` | 生产环境 ID；空则永远不部署生产 |
+| `target` | `auto` | `auto`：`v*` 标签 → 生产，其余 → 测试；也可以写死 `test` / `production` |
+| `test_command` | `''` | 部署前在 `workdir` 里运行的命令，失败就不部署 |
 | `workdir` | `.` | `cloudbaserc.json` 所在目录 |
 | `functions` | `''` | 空格分隔的函数名，或 `all` |
 | `functions_dir` | `''` | 函数父目录，传给 `--dir <functions_dir>/<name>` |
@@ -129,7 +147,7 @@ jobs:
 | `hosting_target` | `''` | 静态托管中的目标路径 |
 | `cli_version` | `3.8.4` | 固定的 `@cloudbase/cli` 版本 |
 
-Secret：`CLOUDBASE_API_KEY`（环境 API Key）。
+Secrets：`CLOUDBASE_API_KEY`（测试环境的 API Key，必填）、`CLOUDBASE_PROD_API_KEY`（生产环境的 API Key，部署生产时必填）。
 
 ## 4. 部署 MCP 网关
 
@@ -159,11 +177,11 @@ permissions:
   contents: read
 jobs:
   deploy:
-    uses: wenjinliuu/ios-ci-workflows/.github/workflows/cloudbase-mcp-gateway-deploy.yml@<SHA>
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/cloudbase-mcp-gateway-deploy.yml@<SHA> # v1.0.0
     with:
-      ci_revision: <SHA>
       worker_name: cloudbase-mcp-gateway
-      cloudbase_env_id: your-env-id
+      cloudbase_env_id: your-test-env-id  # 填测试环境，不要填生产
+      # disable_plugins: rag,cloudrun     # 可选：不让 AI 用的插件
       github_client_id: your-github-oauth-client-id
       allowed_github_login: your-github-login
       kv_namespace_id: your-kv-namespace-id
@@ -176,7 +194,7 @@ jobs:
       COOKIE_ENCRYPTION_KEY: ${{ secrets.COOKIE_ENCRYPTION_KEY }}
 ```
 
-工作流会：按 `ci_revision` 拉取网关代码 → 用输入生成部署配置（拒绝任何 `your-` 占位值）→ 类型检查 → 把提供了的 Secret 写入 Worker（临时文件权限 600，用完删除；某个 Secret 不传则保留 Worker 上现有的值）→ `wrangler deploy` → 若填了 `public_url`，确认 OAuth 元数据可访问且未授权的 `/mcp` 请求返回 401。
+工作流会：从 `uses:` 指向的同一个仓库和提交拉取网关代码（fork 后自动用你 fork 里的代码） → 用输入生成部署配置（拒绝任何 `your-` 占位值）→ 类型检查 → 把提供了的 Secret 写入 Worker（临时文件权限 600，用完删除；某个 Secret 不传则保留 Worker 上现有的值）→ `wrangler deploy` → 若填了 `public_url`，确认 OAuth 元数据可访问且未授权的 `/mcp` 请求返回 401。
 
 `CLOUDFLARE_API_TOKEN`：Cloudflare Dashboard → My Profile → API Tokens → 用 **Edit Cloudflare Workers** 模板创建。`CLOUDFLARE_ACCOUNT_ID` 在 Workers 概览页右侧。
 
@@ -184,17 +202,23 @@ jobs:
 
 | 名称 | 放在哪里 | 用途 |
 | --- | --- | --- |
-| 环境 API Key | Worker Secret `CLOUDBASE_API_KEY`；App 仓库 Actions Secret `CLOUDBASE_API_KEY` | 网关换 MCP token；CLI 登录 |
+| 测试环境 API Key | Worker Secret `CLOUDBASE_API_KEY`；App 仓库 Actions Secret `CLOUDBASE_API_KEY` | 网关换 MCP token；CLI 部署测试环境 |
+| 生产环境 API Key | App 仓库 Actions Secret `CLOUDBASE_PROD_API_KEY` | CLI 部署生产环境（只在 `v*` 标签时） |
 | GitHub OAuth Client Secret | Worker Secret `GITHUB_CLIENT_SECRET` | 网关 GitHub 登录 |
 | Cookie 签名密钥 | Worker Secret `COOKIE_ENCRYPTION_KEY` | 授权页 Cookie 签名 |
 | Cloudflare API Token / Account ID | 部署网关的私有仓库 Actions Secrets | 仅“方式二”部署网关时 |
-| 环境 ID、GitHub Client ID、允许的 GitHub 账号、KV id | `wrangler.jsonc` 或部署工作流 `with:` | 非机密配置 |
+| 环境 ID、GitHub Client ID、允许的 GitHub 账号、KV id、`DISABLE_PLUGINS` | `wrangler.jsonc` 或部署工作流 `with:` | 非机密配置 |
 
 中央仓库本身不保存上述任何一项。
 
 ## 6. 安全提示
 
-- CloudBase MCP 具备写权限（删数据、改云函数、改安全规则），让 AI 执行写操作前先确认。
-- 可以用 `disable_plugins` 或单独的只读环境降低风险。
+- CloudBase MCP 具备写权限（删数据、改云函数、改安全规则），所以网关默认指向**测试环境**，让 AI 执行写操作前也先确认。
+- 用部署工作流的 `disable_plugins`（或 `wrangler.jsonc` 的 `DISABLE_PLUGINS`）隐藏不需要的工具，网关会把它作为 `disable_plugins` 参数转给官方 MCP。
+- 部署只走 git → CI；MCP 只用来查数据、看日志、排查问题。
 - 网关只允许 `ALLOWED_GITHUB_LOGIN` 一个 GitHub 账号，变量为空时拒绝所有人。
 - 发现 Key 泄露：在云开发控制台删除该 API Key，重新创建后更新对应 Secret。
+
+## 7. 网关和本仓库的关系
+
+MCP 网关不属于 iOS CI：任何用 CloudBase、想让手机上的 AI 连后端的人都能用它。它暂时放在本仓库，是因为三个 App 正在用；长期计划把它移到独立仓库（与已有的 cloudflare-mcp-gateway 仓库合并或并列），本仓库只留链接。移走之前，`cloudbase-mcp-gateway-deploy.yml` 保持可用，`cloudbase-mcp-gateway.yml` 是本仓库自己的代码检查，不给使用者调用。

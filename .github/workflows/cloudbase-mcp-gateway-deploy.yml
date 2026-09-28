@@ -3,20 +3,17 @@ name: Reusable CloudBase MCP Gateway Deploy
 on:
   workflow_call:
     inputs:
-      ci_revision:
-        description: Commit of ci_repository whose cloudbase-mcp-gateway is deployed; match the uses @ SHA
-        type: string
-        required: true
-      ci_repository:
-        description: Repository the gateway code is fetched from; set it to your fork when you use one
-        type: string
-        default: wenjinliuu/ios-ci-workflows
       worker_name:
         type: string
         default: cloudbase-mcp-gateway
       cloudbase_env_id:
+        description: CloudBase environment the AI reaches; use the test environment, not production
         type: string
         required: true
+      disable_plugins:
+        description: Comma-separated CloudBase MCP plugins to hide from the AI; empty keeps them all
+        type: string
+        default: ''
       github_client_id:
         type: string
         required: true
@@ -59,8 +56,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.ci_repository }}
-          ref: ${{ inputs.ci_revision }}
+          # The gateway code comes from the same repository and commit as this workflow, so a fork deploys
+          # its own gateway and the uses @ SHA decides the version.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .ci-workflows
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -75,6 +74,7 @@ jobs:
           GITHUB_CLIENT_ID: ${{ inputs.github_client_id }}
           ALLOWED_GITHUB_LOGIN: ${{ inputs.allowed_github_login }}
           KV_NAMESPACE_ID: ${{ inputs.kv_namespace_id }}
+          DISABLE_PLUGINS: ${{ inputs.disable_plugins }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -87,6 +87,7 @@ jobs:
           config['kv_namespaces'][0]['id'] = os.environ['KV_NAMESPACE_ID']
           for key, value in [('name', config['name']), *config['vars'].items(), ('kv', os.environ['KV_NAMESPACE_ID'])]:
               assert value and not value.startswith('your-'), 'Set a real value for ' + key
+          config['vars']['DISABLE_PLUGINS'] = os.environ['DISABLE_PLUGINS']
           with open('wrangler.deploy.json', 'w') as out:
               json.dump(config, out, indent=2)
           PY

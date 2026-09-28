@@ -1,0 +1,35 @@
+# ios-ci-workflows 的 App 配置：所有工作流都从这里读设置，入口文件里只剩 uses: 和 secrets:。
+# 只写你要改的键，其余用默认值。完整说明见 docs/config.md。
+
+# 工程（必填：project、scheme、bundle_id）
+workdir: .                          # .xcodeproj 所在目录，相对仓库根
+project: MyApp.xcodeproj
+scheme: MyApp
+bundle_id: com.example.myapp
+display_name: ''                    # 填了会在发版时核对 CFBundleDisplayName
+sync_command: 'true'                # 把 SVG 图层同步进 .icon 的命令；没有就填 'true'
+generate_command: 'true'            # XcodeGen 项目填 xcodegen generate；已提交 .xcodeproj 填 'true'
+icon_path: ''                       # .icon 包路径（相对 workdir）；用 App Icon 工作流时必填
+
+# 工具链：显式固定，快照参考图只在同一 Xcode、机型、iOS 版本上可比。
+# runner 镜像升级后如果 CI 报“没有这个模拟器”，按报错里的列表改这里，再重录快照。
+toolchain:
+  xcode: '26.6'
+  simulator: iPhone 17 Pro
+  ios: '26.4'
+
+build_test:
+  test_plan: ''                     # 用 .xctestplan 跑多种配置时填测试计划名
+  accessibility_audit: warn         # 无障碍审计先只警告；问题清干净后改成 fail
+  commit_recorded_snapshots: true   # 录制快照后由 CI 提交回分支（入口文件要给 contents: write）
+
+app_icon:
+  commit_previews: false            # 把 7 张预览图提交回仓库（入口文件要给 contents: write）
+  previews_dir: DesignAssets/AppIcon/previews
+
+testflight:
+  entitlement_mode: none            # none | required | best-effort | icloud-verified
+  entitlements_path: ''             # entitlement_mode 不是 none 时必填（相对 workdir）
+  icloud_container: ''              # icloud-verified 时必填，如 iCloud.com.example.myapp
+  expected_team_id: ''              # 填了会核对 APPLE_TEAM_ID，防止传错团队
+  acceptance_issue: true            # 上传成功后开“发版验收”Issue（入口文件要给 issues: write）

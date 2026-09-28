@@ -1,76 +1,58 @@
 name: Reusable TestFlight Release
 
+# 发出去的一定是测过的：verify（核对 Apple 注册）→ test（完整跑一次 Build & Test）→ release（签名上传）
+# → acceptance（开发版验收 Issue）。App 的设置读自 App 仓库的 .ios-ci.yml 的顶层键和 testflight 段。
 on:
   workflow_call:
     inputs:
-      workdir: {type: string, required: true}
-      project: {type: string, required: true}
-      scheme: {type: string, required: true}
-      bundle_id: {type: string, required: true}
-      sync_command: {type: string, required: true}
-      generate_command: {type: string, required: true}
-      entitlements_path: {type: string, default: ''}
-      entitlement_mode: {type: string, default: none}
-      icloud_container: {type: string, default: ''}
+      config:
+        description: Path of the App repository's config file
+        type: string
+        default: .ios-ci.yml
       lookup_only: {type: boolean, default: false}
       dry_run: {type: boolean, default: false}
       build_number: {type: string, default: ''}
       marketing_version: {type: string, default: ''}
-      display_name: {type: string, default: ''}
-      inspect_icloud: {type: boolean, default: false}
-      expected_team_id: {type: string, default: ''}
-      artifact_prefix: {type: string, default: ''}
-      ci_revision: {type: string, required: true}
-      ci_repository: {type: string, default: wenjinliuu/ios-ci-workflows}
-      build_workflow: {type: string, default: ''}
-      build_wait_minutes: {type: number, default: 30}
-      acceptance_issue: {type: boolean, default: false}
-      acceptance_checklist: {type: string, default: .github/release-checklist.md}
-      acceptance_extra: {type: string, default: .github/release-checklist-current.md}
     secrets:
       APPLE_TEAM_ID: {required: true}
       APP_STORE_CONNECT_KEY_ID: {required: true}
       APP_STORE_CONNECT_ISSUER_ID: {required: true}
       APP_STORE_CONNECT_PRIVATE_KEY: {required: true}
 
-# No workflow-level permissions: verify and release pin contents: read themselves, while the optional
-# gate and acceptance jobs inherit the caller's token, so callers that skip them grant nothing extra.
+# No workflow-level permissions: every job pins contents: read except acceptance, which inherits the
+# caller's token, so only callers that turn on testflight.acceptance_issue grant issues: write.
 jobs:
-  gate:
-    # Release only a commit whose Build & Test run is green.
-    if: ${{ inputs.build_workflow != '' && !inputs.dry_run && !inputs.lookup_only }}
+  config:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      config: ${{ steps.read.outputs.config }}
     steps:
-      - name: Require a green Build & Test run for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW: ${{ inputs.build_workflow }}
-          WAIT_MINUTES: ${{ inputs.build_wait_minutes }}
+      - name: Locate ios-ci-workflows
         run: |
-          set -euo pipefail
-          deadline=$(( $(date +%s) + WAIT_MINUTES * 60 ))
-          while true; do
-            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW/runs?head_sha=$GITHUB_SHA&per_page=20" \
-              --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]') || {
-              echo "::error::Cannot read $WORKFLOW runs; grant 'actions: read' in the caller workflow"; exit 1; }
-            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<< "$runs")" -gt 0 ]; then
-              echo "Build & Test passed for $GITHUB_SHA: $(jq -r '[.[] | select(.conclusion == "success")][0].url' <<< "$runs")"
-              exit 0
-            fi
-            pending=$(jq '[.[] | select(.status != "completed")] | length' <<< "$runs")
-            if [ "$pending" -eq 0 ]; then
-              echo "::error::No green $WORKFLOW run for $GITHUB_SHA; fix Build & Test before releasing"
-              jq -r '.[] | "  \(.conclusion // .status)  \(.url)"' <<< "$runs"
-              exit 1
-            fi
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::$WORKFLOW for $GITHUB_SHA still running after $WAIT_MINUTES minutes"; exit 1
-            fi
-            echo "Waiting for $pending $WORKFLOW run(s) on $GITHUB_SHA…"
-            sleep 30
-          done
+          test -n "${{ job.workflow_repository }}" && test -n "${{ job.workflow_sha }}" || {
+            echo '::error::This runner does not report job.workflow_repository / job.workflow_sha'; exit 1; }
+          echo "ios-ci-workflows ${{ job.workflow_repository }}@${{ job.workflow_sha }}"
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ inputs.config }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - id: read
+        env:
+          CONFIG_PATH: ${{ inputs.config }}
+        run: python3 .ci-workflows/scripts/ios-ci-config.py
+
   verify:
+    needs: config
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -82,35 +64,40 @@ jobs:
       KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
-      EXPECTED_BUNDLE_ID: ${{ inputs.bundle_id }}
-      ICLOUD_CONTAINER: ${{ inputs.icloud_container }}
+      EXPECTED_BUNDLE_ID: ${{ fromJSON(needs.config.outputs.config).bundle_id }}
+      ICLOUD_CONTAINER: ${{ fromJSON(needs.config.outputs.config).testflight.icloud_container }}
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ inputs.ci_repository }}
-          ref: ${{ inputs.ci_revision }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
       - name: Verify App Store Connect registration
         id: check
         run: |
           set -euo pipefail
-          if [ "${{ inputs.entitlement_mode }}" = icloud-verified ] && [ -z "$ICLOUD_CONTAINER" ]; then
-            echo '::error::entitlement_mode icloud-verified needs icloud_container'; exit 1
-          fi
           mkdir -p ~/.appstoreconnect/private_keys
           printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
           chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
-          pip install --quiet 'pyjwt[crypto]'
+          pip install --quiet 'pyjwt[crypto]==2.10.1'
           if [ "${{ inputs.lookup_only }}" = true ]; then unset EXPECTED_BUNDLE_ID; fi
           python3 scripts/asc-verify.py
       - name: Clean up API key
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
+  test:
+    # 测试门槛：把 Build & Test 完整跑一次，全部通过才签名上传。
+    needs: [config, verify]
+    if: ${{ always() && !cancelled() && !inputs.lookup_only && needs.config.result == 'success' && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-test.yml
+    with:
+      config: ${{ inputs.config }}
   release:
-    needs: [gate, verify]
+    needs: [config, verify, test]
     if: >-
-      ${{ always() && !cancelled() && !inputs.lookup_only
-      && (needs.gate.result == 'success' || needs.gate.result == 'skipped')
+      ${{ always() && !cancelled() && !inputs.lookup_only && needs.test.result == 'success'
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
     runs-on: macos-26
     timeout-minutes: 55
@@ -121,17 +108,17 @@ jobs:
       number: ${{ steps.version.outputs.number }}
     defaults:
       run:
-        working-directory: ${{ inputs.workdir }}
+        working-directory: ${{ fromJSON(needs.config.outputs.config).workdir }}
         shell: bash
     env:
-      PROJECT: ${{ inputs.project }}
-      SCHEME: ${{ inputs.scheme }}
-      EXPECTED_BUNDLE_ID: ${{ inputs.bundle_id }}
-      EXPECTED_DISPLAY_NAME: ${{ inputs.display_name }}
-      EXPECTED_TEAM_ID: ${{ inputs.expected_team_id }}
-      ENTITLEMENTS_PATH: ${{ inputs.entitlements_path }}
-      ENTITLEMENT_MODE: ${{ inputs.entitlement_mode }}
-      ICLOUD_CONTAINER: ${{ inputs.icloud_container }}
+      PROJECT: ${{ fromJSON(needs.config.outputs.config).project }}
+      SCHEME: ${{ fromJSON(needs.config.outputs.config).scheme }}
+      EXPECTED_BUNDLE_ID: ${{ fromJSON(needs.config.outputs.config).bundle_id }}
+      EXPECTED_DISPLAY_NAME: ${{ fromJSON(needs.config.outputs.config).display_name }}
+      EXPECTED_TEAM_ID: ${{ fromJSON(needs.config.outputs.config).testflight.expected_team_id }}
+      ENTITLEMENTS_PATH: ${{ fromJSON(needs.config.outputs.config).testflight.entitlements_path }}
+      ENTITLEMENT_MODE: ${{ fromJSON(needs.config.outputs.config).testflight.entitlement_mode }}
+      ICLOUD_CONTAINER: ${{ fromJSON(needs.config.outputs.config).testflight.icloud_container }}
       ENABLE_ICLOUD: ${{ needs.verify.outputs.icloud }}
       TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -140,26 +127,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: maxim-lobanov/setup-xcode@v1
+      - name: Fetch ios-ci-workflows
+        uses: actions/checkout@v4
         with:
-          xcode-version: '26.6'
-      - name: Sync artwork and generate project
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ci-workflows
+          persist-credentials: false
+      - name: Prepare Xcode and project
+        uses: ./.ci-workflows/.github/actions/prepare
+        with:
+          config: ${{ needs.config.outputs.config }}
+          development_team: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Install App Store Connect API key
+        if: ${{ !inputs.dry_run }}
         env:
-          SYNC_COMMAND: ${{ inputs.sync_command }}
-          GENERATE_COMMAND: ${{ inputs.generate_command }}
           PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [[ "$GENERATE_COMMAND" == *xcodegen* ]]; then brew install xcodegen; fi
-          bash -e -c "$SYNC_COMMAND"
-          DEVELOPMENT_TEAM="$TEAM_ID" bash -e -c "$GENERATE_COMMAND"
-          if [ "${{ inputs.dry_run }}" != true ]; then
-            test -n "$TEAM_ID" && test -n "$KEY_ID" && test -n "$ISSUER_ID" && test -n "$PRIVATE_KEY"
-            if [ -n "$EXPECTED_TEAM_ID" ]; then test "$TEAM_ID" = "$EXPECTED_TEAM_ID"; fi
-            mkdir -p ~/.appstoreconnect/private_keys
-            printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
-            chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
-          fi
+          test -n "$TEAM_ID" && test -n "$KEY_ID" && test -n "$ISSUER_ID" && test -n "$PRIVATE_KEY"
+          if [ -n "$EXPECTED_TEAM_ID" ]; then test "$TEAM_ID" = "$EXPECTED_TEAM_ID"; fi
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
       - name: Resolve version numbers
         id: version
         env:
@@ -199,8 +189,8 @@ jobs:
           fi
           echo "version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" >> "$GITHUB_OUTPUT"
       - name: Embed entitlements into unsigned archive
-        if: ${{ !inputs.dry_run && inputs.entitlement_mode != 'none' }}
-        continue-on-error: ${{ inputs.entitlement_mode == 'best-effort' }}
+        if: ${{ !inputs.dry_run && fromJSON(needs.config.outputs.config).testflight.entitlement_mode != 'none' }}
+        continue-on-error: ${{ fromJSON(needs.config.outputs.config).testflight.entitlement_mode == 'best-effort' }}
         run: |
           set -euo pipefail
           if [ "$ENTITLEMENT_MODE" = "icloud-verified" ] && [ "$ENABLE_ICLOUD" != true ]; then exit 0; fi
@@ -233,7 +223,7 @@ jobs:
             -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
             2>&1 | tee build/release-export.log
       - name: Inspect exported iCloud entitlements (informational)
-        if: ${{ always() && inputs.inspect_icloud && !inputs.dry_run }}
+        if: ${{ always() && fromJSON(needs.config.outputs.config).testflight.inspect_icloud && !inputs.dry_run }}
         continue-on-error: true
         run: |
           set +e
@@ -269,28 +259,28 @@ jobs:
             echo 'Binary has no iCloud ubiquity entitlement'
           fi
       - name: Upload entitlement report
-        if: ${{ always() && inputs.inspect_icloud }}
+        if: ${{ always() && fromJSON(needs.config.outputs.config).testflight.inspect_icloud }}
         uses: actions/upload-artifact@v4
         with:
           name: entitlements-${{ steps.version.outputs.number }}
           path: |
-            ${{ inputs.workdir }}/build/entitlements.txt
-            ${{ inputs.workdir }}/build/profile-entitlements.txt
+            ${{ fromJSON(needs.config.outputs.config).workdir }}/build/entitlements.txt
+            ${{ fromJSON(needs.config.outputs.config).workdir }}/build/profile-entitlements.txt
           if-no-files-found: ignore
       - name: Upload dSYMs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.artifact_prefix }}dsyms-${{ steps.version.outputs.number }}
-          path: ${{ inputs.workdir }}/build/${{ inputs.scheme }}.xcarchive/dSYMs
+          name: ${{ fromJSON(needs.config.outputs.config).testflight.artifact_prefix }}dsyms-${{ steps.version.outputs.number }}
+          path: ${{ fromJSON(needs.config.outputs.config).workdir }}/build/${{ fromJSON(needs.config.outputs.config).scheme }}.xcarchive/dSYMs
           if-no-files-found: ignore
       - name: Clean up API key
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
   acceptance:
     # Opens a device checklist issue for the build that was just uploaded.
-    needs: release
-    if: ${{ inputs.acceptance_issue && !inputs.dry_run && needs.release.result == 'success' }}
+    needs: [config, release]
+    if: ${{ fromJSON(needs.config.outputs.config).testflight.acceptance_issue && !inputs.dry_run && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -300,11 +290,11 @@ jobs:
       - name: Open release acceptance issue
         env:
           GH_TOKEN: ${{ github.token }}
-          APP_NAME: ${{ inputs.display_name || inputs.scheme }}
+          APP_NAME: ${{ fromJSON(needs.config.outputs.config).display_name || fromJSON(needs.config.outputs.config).scheme }}
           VERSION: ${{ needs.release.outputs.version }}
           NUMBER: ${{ needs.release.outputs.number }}
-          CHECKLIST: ${{ inputs.acceptance_checklist }}
-          EXTRA: ${{ inputs.acceptance_extra }}
+          CHECKLIST: ${{ fromJSON(needs.config.outputs.config).testflight.acceptance_checklist }}
+          EXTRA: ${{ fromJSON(needs.config.outputs.config).testflight.acceptance_extra }}
         run: |
           set -euo pipefail
           section() { if [ -s "$1" ]; then cat "$1"; else echo "$2"; fi; }

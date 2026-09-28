@@ -1,0 +1,22 @@
+name: App Icon
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'DesignAssets/AppIcon/**'        # 改成你的图标素材路径
+      - '!DesignAssets/AppIcon/previews/**'
+      - '.ios-ci.yml'
+      - '.github/workflows/app-icon.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 只有 app_icon.commit_previews 为 true 时会写；否则改成 read
+
+concurrency:
+  group: app-icon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  icon:
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/app-icon.yml@<SHA> # v1.0.0

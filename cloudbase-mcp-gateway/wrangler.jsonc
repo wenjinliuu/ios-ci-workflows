@@ -8,10 +8,13 @@
 	"preview_urls": false,
 	"keep_vars": true,
 	"vars": {
-		// Replace all three before deploying. None of them is a secret.
+		// Replace these three before deploying. None of them is a secret.
+		// Point the gateway at the TEST environment: the MCP tools can delete data and change functions.
 		"CLOUDBASE_ENV_ID": "your-cloudbase-env-id",
 		"GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
 		"ALLOWED_GITHUB_LOGIN": "your-github-login",
+		// Optional: comma-separated CloudBase MCP plugins to hide from the AI; empty keeps them all.
+		"DISABLE_PLUGINS": "",
 	},
 	"secrets": {
 		"required": ["GITHUB_CLIENT_SECRET", "COOKIE_ENCRYPTION_KEY", "CLOUDBASE_API_KEY"],

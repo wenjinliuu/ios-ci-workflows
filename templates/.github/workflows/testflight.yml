@@ -1,0 +1,45 @@
+name: TestFlight
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      lookup_only:
+        description: 只核对 Apple 注册（Bundle ID、App），不打包
+        type: boolean
+        default: false
+      dry_run:
+        description: 跑测试并打包，但不签名不上传
+        type: boolean
+        default: false
+      marketing_version:
+        description: 版本号（留空用工程里的）
+        type: string
+        default: ''
+      build_number:
+        description: 构建号（留空用运行编号）
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write     # 开发版验收 Issue；testflight.acceptance_issue 为 false 时可去掉
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: wenjinliuu/ios-ci-workflows/.github/workflows/testflight-release.yml@<SHA> # v1.0.0
+    with:
+      lookup_only: ${{ inputs.lookup_only || false }}
+      dry_run: ${{ inputs.dry_run || false }}
+      marketing_version: ${{ inputs.marketing_version || '' }}
+      build_number: ${{ inputs.build_number || '' }}
+    secrets:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}

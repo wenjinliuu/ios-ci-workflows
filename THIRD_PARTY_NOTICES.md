@@ -43,18 +43,18 @@ SOFTWARE.
 
 | 项目 | 版本 | 许可 | 在本仓库中的用途 |
 | --- | --- | --- | --- |
-| [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)（`xcodebuildmcp`） | 2.7.0 | MIT | `agent-preview.yml` 与 `preview-proxy.cjs`：抓取 Simulator 无障碍 UI 树 |
-| [serve-sim](https://github.com/EvanBacon/serve-sim)（`serve-sim`） | 0.1.46 | Apache-2.0 | `agent-preview.yml`：Simulator 画面串流、HID 触控、文字输入 |
+| [XcodeBuildMCP](https://github.com/getsentry/XcodeBuildMCP)（`xcodebuildmcp`） | 2.7.0 | MIT | `build-test.yml`：抓取 Simulator 无障碍 UI 树 |
+| [serve-sim](https://github.com/EvanBacon/serve-sim)（`serve-sim`） | 0.1.46 | Apache-2.0 | `live-preview.yml`：Simulator 画面串流、HID 触控、文字输入 |
 | [icon-composer-mcp](https://github.com/ethbak/icon-composer-mcp) | 1.1.0 | MIT | `app-icon.yml`：渲染同一图标在 6 种外观模式下的预览图和 1024 市场图 |
-| [xcbeautify](https://github.com/cpisciotta/xcbeautify) | 3.2.1 | MIT | `agent-preview.yml`：整理 xcodebuild 日志（校验 SHA-256） |
-| [SwiftLint](https://github.com/realm/SwiftLint) | 0.65.1 | MIT | `agent-preview.yml` static-checks：App 有 `.swiftlint.yml` 时运行（校验 SHA-256） |
-| [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) | 0.63.0 | MIT | `agent-preview.yml` static-checks：App 有 `.swiftformat` 时以 `--lint` 运行（校验 SHA-256） |
-| [cloudflared](https://github.com/cloudflare/cloudflared) | 2026.9.3 | Apache-2.0 | `agent-preview.yml`：实时预览的 Quick Tunnel / Named Tunnel |
+| [xcbeautify](https://github.com/cpisciotta/xcbeautify) | 3.2.1 | MIT | `build-test.yml`：整理 xcodebuild 日志（校验 SHA-256） |
+| [SwiftLint](https://github.com/realm/SwiftLint) | 0.65.1 | MIT | `build-test.yml` static-checks：App 有 `.swiftlint.yml` 时运行（校验 SHA-256） |
+| [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) | 0.63.0 | MIT | `build-test.yml` static-checks：App 有 `.swiftformat` 时以 `--lint` 运行（校验 SHA-256） |
+| [cloudflared](https://github.com/cloudflare/cloudflared) | 2026.9.3 | Apache-2.0 | `live-preview.yml`：实时预览的 Quick Tunnel / Named Tunnel |
 | [node-http-proxy](https://github.com/http-party/node-http-proxy)（`http-proxy`） | 1.18.1 | MIT | `preview-proxy.cjs`：反向代理画面流与 WebSocket |
 | [ws](https://github.com/websockets/ws) | 8.21.0 | MIT | `check-public-preview.cjs`：公网 HID WebSocket 验证 |
 | [setup-xcode](https://github.com/maxim-lobanov/setup-xcode) | v1 | MIT | 各工作流：选择 Xcode 版本 |
-| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | Homebrew 最新 | MIT | 各工作流：App 使用 `xcodegen` 时生成工程 |
-| [PyJWT](https://github.com/jpadilla/pyjwt) | pip 最新 | MIT | `testflight-release.yml` verify job：`scripts/asc-verify.py` 签发 App Store Connect JWT |
+| [XcodeGen](https://github.com/yonaskolb/XcodeGen) | 2.46.0 | MIT | 各 iOS 工作流：App 使用 `xcodegen` 时生成工程（校验 SHA-256） |
+| [PyJWT](https://github.com/jpadilla/pyjwt) | 2.10.1 | MIT | `testflight-release.yml` verify job：`scripts/asc-verify.py` 签发 App Store Connect JWT |
 | [@cloudflare/workers-oauth-provider](https://github.com/cloudflare/workers-oauth-provider) | ^0.8.3 | MIT | `cloudbase-mcp-gateway`：OAuth 2.1 服务端（npm 依赖） |
 | [Hono](https://github.com/honojs/hono) | ^4.13.8 | MIT | `cloudbase-mcp-gateway`：路由（npm 依赖） |
 | [CloudBase CLI](https://www.npmjs.com/package/@cloudbase/cli)（`@cloudbase/cli`） | 3.8.4 | ISC | `cloudbase-deploy.yml`：部署云函数与静态托管 |

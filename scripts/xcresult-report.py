@@ -145,7 +145,7 @@ def render_markdown(report: dict, *, accessibility_mode: str, record_mode: bool,
             lines.append(f"| `{item['test']}` | {one_line(item['reason'])} | {files} |")
         lines.append("")
     if any(f["attachments"] for f in report["failures"]):
-        lines += [f"附件（快照的 reference / failure / difference 图等）在产物 `agent-preview-{run}` 的 `report/attachments/` 里。", ""]
+        lines += [f"附件（快照的 reference / failure / difference 图等）在产物 `build-test-{run}` 的 `report/attachments/` 里。", ""]
 
     if report["recorded_snapshots"]:
         lines += [f"### 新录制的快照参考图（{len(report['recorded_snapshots'])}）", "",

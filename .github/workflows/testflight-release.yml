@@ -1,7 +1,7 @@
 name: Reusable TestFlight Release
 
-# 发出去的一定是测过的：verify（核对 Apple 注册）→ test（完整跑一次 Build & Test）→ release（签名上传）
-# → acceptance（开发版验收 Issue）。App 的设置读自 App 仓库的 .ios-ci.yml 的顶层键和 testflight 段。
+# 发出去的一定是测过的：verify（核对 Apple 注册）→ gate（查这个提交的 fast + ui 是否都已通过）
+# → test（查不到才完整跑一次 Build & Test）→ release（签名上传）→ acceptance（开发版验收 Issue）。App 的设置读自 App 仓库的 .ios-ci.yml 的顶层键和 testflight 段。
 on:
   workflow_call:
     inputs:
@@ -19,8 +19,9 @@ on:
       APP_STORE_CONNECT_ISSUER_ID: {required: true}
       APP_STORE_CONNECT_PRIVATE_KEY: {required: true}
 
-# No workflow-level permissions: every job pins contents: read except acceptance, which inherits the
-# caller's token, so only callers that turn on testflight.acceptance_issue grant issues: write.
+# No workflow-level permissions: every job pins contents: read except gate and acceptance, which inherit the
+# caller's token. gate needs actions: read (and pull-requests: read on private repositories) to reuse earlier
+# results and falls back to running the full suite without them; acceptance needs issues: write.
 jobs:
   config:
     runs-on: ubuntu-latest
@@ -35,12 +36,12 @@ jobs:
           test -n "${{ job.workflow_repository }}" && test -n "${{ job.workflow_sha }}" || {
             echo '::error::This runner does not report job.workflow_repository / job.workflow_sha'; exit 1; }
           echo "ios-ci-workflows ${{ job.workflow_repository }}@${{ job.workflow_sha }}"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: ${{ inputs.config }}
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -67,7 +68,7 @@ jobs:
       EXPECTED_BUNDLE_ID: ${{ fromJSON(needs.config.outputs.config).bundle_id }}
       ICLOUD_CONTAINER: ${{ fromJSON(needs.config.outputs.config).testflight.icloud_container }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -85,19 +86,44 @@ jobs:
       - name: Clean up API key
         if: always()
         run: rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8
+  gate:
+    # 测试门槛：这个提交的 fast（或合并它的 PR 上的 fast）和 ui 都通过了，就不再重跑。
+    needs: config
+    if: ${{ !inputs.lookup_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      reuse: ${{ steps.find.outputs.reuse }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Look for passing fast and ui runs of this commit
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: python3 scripts/find-test-results.py
   test:
-    # 测试门槛：把 Build & Test 完整跑一次，全部通过才签名上传。
-    needs: [config, verify]
-    if: ${{ always() && !cancelled() && !inputs.lookup_only && needs.config.result == 'success' && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    # 查不到已有结果时，把 Build & Test 的全部测试现场跑一次，全部通过才签名上传。
+    needs: [config, verify, gate]
+    if: >-
+      ${{ always() && !cancelled() && !inputs.lookup_only && needs.config.result == 'success'
+      && (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+      && needs.gate.outputs.reuse != 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/build-test.yml
     with:
       config: ${{ inputs.config }}
+      suite: full
   release:
-    needs: [config, verify, test]
+    needs: [config, verify, gate, test]
     if: >-
-      ${{ always() && !cancelled() && !inputs.lookup_only && needs.test.result == 'success'
+      ${{ always() && !cancelled() && !inputs.lookup_only
+      && (needs.test.result == 'success' || (needs.test.result == 'skipped' && needs.gate.outputs.reuse == 'true'))
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
     runs-on: macos-26
     timeout-minutes: 55
@@ -124,11 +150,11 @@ jobs:
       KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Fetch ios-ci-workflows
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -260,7 +286,7 @@ jobs:
           fi
       - name: Upload entitlement report
         if: ${{ always() && fromJSON(needs.config.outputs.config).testflight.inspect_icloud }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: entitlements-${{ steps.version.outputs.number }}
           path: |
@@ -269,7 +295,7 @@ jobs:
           if-no-files-found: ignore
       - name: Upload dSYMs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ fromJSON(needs.config.outputs.config).testflight.artifact_prefix }}dsyms-${{ steps.version.outputs.number }}
           path: ${{ fromJSON(needs.config.outputs.config).workdir }}/build/${{ fromJSON(needs.config.outputs.config).scheme }}.xcarchive/dSYMs
@@ -284,7 +310,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Open release acceptance issue

@@ -38,6 +38,10 @@ DEFAULTS = {
     },
     "build_test": {
         "test_plan": "",
+        # 快线 / 慢线：两份测试计划都写了，Build & Test 才按触发方式自动选范围（见 docs/config.md）
+        "fast_test_plan": "",
+        "full_test_plan": "",
+        "ui_test_target": "",
         "accessibility_audit": "warn",
         "accessibility_test_pattern": "(?i)accessibility",
         "commit_recorded_snapshots": False,

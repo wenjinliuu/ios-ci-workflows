@@ -2,10 +2,16 @@ name: Build & Test
 
 on:
   push:
-    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**/*.md', 'docs/**']
   workflow_dispatch:
     inputs:
+      suite:
+        description: 跑哪些测试（fast 快线 / ui 慢线 / full 全部）
+        type: choice
+        options: [fast, ui, full]
+        default: fast
       record_snapshots:
         description: 重新录制快照参考图（有意改了界面时勾选）
         type: boolean
@@ -14,12 +20,14 @@ on:
 permissions:
   contents: write   # 只有录制快照后提交参考图的任务会写；不用这个功能就改成 read
 
+# PR 和它的分支推送共用一组，新提交取消还在跑的旧运行；main 上每次合并都跑完，供 TestFlight 复用
 concurrency:
-  group: build-test-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-test-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
     uses: wenjinliuu/ios-ci-workflows/.github/workflows/build-test.yml@<SHA> # v1.0.0
     with:
+      suite: ${{ inputs.suite || '' }}   # 空：PR 和分支跑快线，推送到 main 跑慢线
       record_snapshots: ${{ inputs.record_snapshots || false }}

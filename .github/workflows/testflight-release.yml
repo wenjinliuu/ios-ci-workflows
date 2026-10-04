@@ -14,6 +14,7 @@ on:
       build_number: {type: string, default: ''}
       marketing_version: {type: string, default: ''}
     secrets:
+      APP_RUNTIME_API_KEY: {required: false}
       APPLE_TEAM_ID: {required: true}
       APP_STORE_CONNECT_KEY_ID: {required: true}
       APP_STORE_CONNECT_ISSUER_ID: {required: true}
@@ -161,6 +162,8 @@ jobs:
           path: .ci-workflows
           persist-credentials: false
       - name: Prepare Xcode and project
+        env:
+          APP_RUNTIME_API_KEY: ${{ secrets.APP_RUNTIME_API_KEY }}
         uses: ./.ci-workflows/.github/actions/prepare
         with:
           config: ${{ needs.config.outputs.config }}

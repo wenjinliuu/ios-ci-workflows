@@ -108,3 +108,9 @@ testflight:
   artifact_prefix: calenease-
   acceptance_issue: true
 ```
+
+## Optional application read key
+
+`testflight-release.yml` accepts the optional `APP_RUNTIME_API_KEY` secret. It is exposed only to the project preparation step (including `generate_command`) when archiving; Build & Test does not receive it. An App can map its own `LOTTERY_READ_API_KEY` repository Secret to this input and generate a gitignored source file before XcodeGen. Never pass a CloudBase management credential here.
+
+An App requiring the key must fail its preparation step when `DEVELOPMENT_TEAM` is set and the key is absent, so CI cannot silently upload a build without access credentials. Shared workflows remain usable by Apps that do not require a read key.

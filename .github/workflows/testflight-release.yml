@@ -100,7 +100,7 @@ jobs:
     if: >-
       ${{ always() && !cancelled() && !inputs.lookup_only && needs.test.result == 'success'
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 55
     permissions:
       contents: read

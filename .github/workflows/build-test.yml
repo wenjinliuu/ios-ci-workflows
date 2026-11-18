@@ -84,7 +84,7 @@ jobs:
 
   test:
     needs: config
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 65
     permissions:
       contents: read
@@ -113,16 +113,16 @@ jobs:
       - name: Install xcbeautify
         run: |
           set -euo pipefail
-          curl -fLsS https://github.com/cpisciotta/xcbeautify/releases/download/3.2.1/xcbeautify-3.2.1-arm64-apple-macosx.zip \
+          curl -fLsS https://github.com/cpisciotta/xcbeautify/releases/download/3.2.1/xcbeautify-3.2.1-x86_64-apple-macosx.zip \
             -o "$RUNNER_TEMP/xcbeautify.zip"
-          echo "ed32972e41bc3aa19588f8b0f4a0209ef70c663ad60bbf4ad84a2de73355d637  $RUNNER_TEMP/xcbeautify.zip" | shasum -a 256 -c -
+          echo "ba65e8efc2ebe8c6f13393aaeb88a0ff849278d9480ee1496affaa3db781ac6e  $RUNNER_TEMP/xcbeautify.zip" | shasum -a 256 -c -
           unzip -oq "$RUNNER_TEMP/xcbeautify.zip" -d "$RUNNER_TEMP/xcbeautify"
       - name: Cache Swift packages
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.build-test-derived-data/SourcePackages
-          key: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
-          restore-keys: swift-packages-${{ runner.os }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-
+          key: swift-packages-${{ runner.os }}-${{ runner.arch }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-${{ hashFiles('**/Package.resolved', '**/project.yml') }}
+          restore-keys: swift-packages-${{ runner.os }}-${{ runner.arch }}-xcode${{ fromJSON(needs.config.outputs.config).toolchain.xcode }}-
       - name: Prepare Xcode, project and Simulator
         id: prep
         uses: ./.ci-workflows/.github/actions/prepare

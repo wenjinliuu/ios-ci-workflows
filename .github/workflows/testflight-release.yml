@@ -196,10 +196,13 @@ jobs:
         continue-on-error: ${{ fromJSON(needs.config.outputs.config).testflight.entitlement_mode == 'best-effort' }}
         run: |
           set -euo pipefail
-          if [ "$ENTITLEMENT_MODE" = "icloud-verified" ] && [ "$ENABLE_ICLOUD" != true ]; then exit 0; fi
+          test "$EXPECTED_BUNDLE_ID" = com.wenjinliu.lotterywallet
           APP_PATH=$(find "build/${SCHEME}.xcarchive/Products/Applications" -maxdepth 1 -name '*.app' -type d -print -quit)
           test -f "$ENTITLEMENTS_PATH"
           if [ -n "$ICLOUD_CONTAINER" ]; then grep -q "$ICLOUD_CONTAINER" "$ENTITLEMENTS_PATH"; fi
+          EXT="$APP_PATH/PlugIns/DrawNotificationService.appex"
+          test -d "$EXT"
+          codesign --force --sign - --entitlements DrawNotificationService/DrawNotificationService.entitlements --generate-entitlement-der "$EXT"
           codesign --force --sign - --entitlements "$ENTITLEMENTS_PATH" --generate-entitlement-der "$APP_PATH"
       - name: Write export options
         if: ${{ !inputs.dry_run }}
@@ -212,7 +215,7 @@ jobs:
           <key>teamID</key><string>${TEAM_ID}</string>
           <key>signingStyle</key><string>automatic</string>
           <key>uploadSymbols</key><true/>
-          <key>destination</key><string>upload</string>
+          <key>destination</key><string>export</string>
           </dict></plist>
           PLIST
       - name: Export, sign and upload to TestFlight
@@ -225,51 +228,30 @@ jobs:
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8 \
             -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
             2>&1 | tee build/release-export.log
-      - name: Inspect exported iCloud entitlements (informational)
-        if: ${{ always() && fromJSON(needs.config.outputs.config).testflight.inspect_icloud && !inputs.dry_run }}
-        continue-on-error: true
+      - name: Verify the signed app and extension before uploading this IPA
+        if: ${{ !inputs.dry_run }}
         run: |
-          set +e
-          cat > build/ExportOptionsLocal.plist <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0"><dict>
-          <key>method</key><string>app-store-connect</string>
-          <key>teamID</key><string>${TEAM_ID}</string>
-          <key>signingStyle</key><string>automatic</string>
-          <key>uploadSymbols</key><false/>
-          </dict></plist>
-          PLIST
-          xcodebuild -exportArchive -archivePath "build/${SCHEME}.xcarchive" \
-            -exportOptionsPlist build/ExportOptionsLocal.plist -exportPath build/inspect \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8 \
-            -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID" \
-            > build/inspect-export.log 2>&1 || exit 0
-          IPA=$(find build/inspect -maxdepth 2 -name '*.ipa' -print -quit)
-          test -n "$IPA" || exit 0
-          mkdir -p build/unzipped
-          unzip -q "$IPA" -d build/unzipped
-          APP=$(find build/unzipped/Payload -maxdepth 1 -name '*.app' -print -quit)
-          test -n "$APP" || exit 0
-          codesign -d --entitlements :- --xml "$APP" 2>/dev/null \
-            | plutil -convert xml1 -o - - | tee build/entitlements.txt
-          security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null \
-            | plutil -extract Entitlements xml1 -o - - | tee build/profile-entitlements.txt
-          if grep -q 'ubiquity-container-identifiers' build/entitlements.txt; then
-            echo 'Binary has iCloud ubiquity entitlement'
-          else
-            echo 'Binary has no iCloud ubiquity entitlement'
-          fi
-      - name: Upload entitlement report
-        if: ${{ always() && fromJSON(needs.config.outputs.config).testflight.inspect_icloud }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: entitlements-${{ steps.version.outputs.number }}
-          path: |
-            ${{ fromJSON(needs.config.outputs.config).workdir }}/build/entitlements.txt
-            ${{ fromJSON(needs.config.outputs.config).workdir }}/build/profile-entitlements.txt
-          if-no-files-found: ignore
+          set -euo pipefail
+          ipa=$(find build/export -name '*.ipa' -print -quit)
+          test -f "$ipa"
+          unzip -q "$ipa" -d build/verified
+          app=$(find build/verified/Payload -maxdepth 1 -name '*.app' -type d -print -quit)
+          ext="$app/PlugIns/DrawNotificationService.appex"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$ext/Info.plist")" = com.wenjinliu.lotterywallet.notificationservice
+          for bundle in "$app" "$ext"; do
+            codesign --verify --strict "$bundle"
+            codesign -d --entitlements :- "$bundle" > build/signed.plist
+            python3 - "$bundle" <<'PYTHON'
+          import plistlib, sys
+          with open("build/signed.plist", "rb") as stream:
+              ent = plistlib.load(stream)
+          assert "group.com.wenjinliu.lotterywallet" in ent.get("com.apple.security.application-groups", [])
+          if sys.argv[1].endswith(".app"):
+              assert ent.get("aps-environment") == "production"
+              assert "iCloud.com.wenjinliu.lotterywallet" in ent.get("com.apple.developer.ubiquity-container-identifiers", [])
+          PYTHON
+          done
+          xcrun altool --upload-app --type ios -f "$ipa" --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
       - name: Upload dSYMs
         if: always()
         uses: actions/upload-artifact@v4

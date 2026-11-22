@@ -60,7 +60,7 @@ MyApp.xctestplan     测试计划（可选）
 ### 三个并行 job
 
 - **static-checks**（`ubuntu-latest`，不耗 macOS 分钟）：仓库根或 `workdir` 里有 `.swiftlint.yml` 就跑 SwiftLint，有 `.swiftformat` 就跑 `swiftformat --lint`，问题标在 PR 的代码行上；都没有就跳过。
-- **test**（`macos-26`）：
+- **test**（按 Xcode 版本选择 macOS 镜像）：
   1. 按 `toolchain` 选 Xcode、生成工程（缓存 Swift Packages），启动固定的模拟器；找不到就失败并列出 runner 上有的。
   2. `xcodebuild test`（不签名）按这次的范围跑对应的测试计划（见下面的“快线与慢线”），日志经 xcbeautify 整理，原始日志另存 `xcodebuild.log`。测试失败不会中断后面的步骤。
   3. 安装并启动 App，校验 Bundle ID，截图 `launch.png`，导出 App 日志；除快线外，用 XcodeBuildMCP 抓无障碍 UI 树 `ui-tree.json`（AI 写测试时的“界面地图”）。

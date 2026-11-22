@@ -23,9 +23,9 @@ App 仓库根目录的 `.ios-ci.yml` 保存 App 的全部设置，所有工作�
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `xcode` | `'26.6'` | Xcode 版本 |
-| `simulator` | `iPhone 17 Pro` | 模拟器机型 |
-| `ios` | `'26.4'` | iOS 版本，写到小版本；同一小版本的补丁运行时（26.4.1）也算 |
+| `xcode` | `'27.2'` | Xcode 版本 |
+| `simulator` | `iPhone 18 Pro` | 模拟器机型 |
+| `ios` | `'27.2'` | iOS 版本，写到小版本；同一小版本的补丁运行时（27.2.1）也算 |
 
 三项都显式固定：快照参考图只在同一 Xcode、机型、iOS 版本上可比。版本号要加引号，否则 YAML 会把 `26.10` 读成 `26.1`。runner 镜像升级后如果没有这个机型或版本，CI 直接失败并列出 runner 上有的，不会悄悄换成别的；按列表改这里，再重录快照。
 
@@ -94,9 +94,9 @@ generate_command: xcodegen generate
 icon_path: CalenEase/Resources/AppIcon.icon
 
 toolchain:
-  xcode: '26.6'
-  simulator: iPhone 17 Pro
-  ios: '26.4'
+  xcode: '27.2'
+  simulator: iPhone 18 Pro
+  ios: '27.2'
 
 build_test:
   commit_recorded_snapshots: true

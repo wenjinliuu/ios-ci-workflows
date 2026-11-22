@@ -32,9 +32,9 @@ DEFAULTS = {
     "generate_command": "true",
     "icon_path": "",
     "toolchain": {
-        "xcode": "26.6",
-        "simulator": "iPhone 17 Pro",
-        "ios": "26.4",
+        "xcode": "27.2",
+        "simulator": "iPhone 18 Pro",
+        "ios": "27.2",
     },
     "build_test": {
         "test_plan": "",
@@ -104,9 +104,18 @@ def main() -> None:
             fail(f"缺少 {key}")
     for key in ("xcode", "ios"):
         if not isinstance(config["toolchain"][key], str):
-            fail(f"toolchain.{key} 要加引号（如 '26.4'），不加引号 26.10 会被读成 26.1")
+            fail(f"toolchain.{key} 要加引号（如 '27.2'），不加引号 26.10 会被读成 26.1")
         if not re.fullmatch(r"\d+(\.\d+){1,2}", config["toolchain"][key]):
-            fail(f"toolchain.{key} 要写完整版本号（如 26.4），不能只写大版本")
+            fail(f"toolchain.{key} 要写完整版本号（如 27.2），不能只写大版本")
+    toolchain = config["toolchain"]
+    if toolchain["xcode"].startswith("26."):
+        # Existing clients can pin Xcode alone and retain the 26.x simulator defaults.
+        overrides = raw.get("toolchain") or {}
+        if "simulator" not in overrides:
+            toolchain["simulator"] = "iPhone 17 Pro"
+        if "ios" not in overrides:
+            toolchain["ios"] = "26.4"
+    toolchain["runner"] = "xcode-27" if toolchain["xcode"].startswith("27.") else "macos-26"
     if config["build_test"]["accessibility_audit"] not in ("warn", "fail"):
         fail("build_test.accessibility_audit 只能是 warn 或 fail")
     mode = config["testflight"]["entitlement_mode"]

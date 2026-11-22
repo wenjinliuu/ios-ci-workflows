@@ -14,9 +14,9 @@ icon_path: ''                       # .icon 包路径（相对 workdir）；用 
 # 工具链：显式固定，快照参考图只在同一 Xcode、机型、iOS 版本上可比。
 # runner 镜像升级后如果 CI 报“没有这个模拟器”，按报错里的列表改这里，再重录快照。
 toolchain:
-  xcode: '26.6'
-  simulator: iPhone 17 Pro
-  ios: '26.4'
+  xcode: '27.2'
+  simulator: iPhone 18 Pro
+  ios: '27.2'
 
 build_test:
   test_plan: ''                     # 只用一份 .xctestplan 时填它的名字

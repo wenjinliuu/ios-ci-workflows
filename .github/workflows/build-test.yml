@@ -105,7 +105,7 @@ jobs:
     # The suite in the job name lets TestFlight find earlier fast and ui results for a commit.
     name: test (${{ needs.config.outputs.suite }})
     needs: config
-    runs-on: macos-26
+    runs-on: ${{ fromJSON(needs.config.outputs.config).toolchain.runner }}
     timeout-minutes: 65
     permissions:
       contents: read

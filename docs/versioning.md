@@ -41,7 +41,7 @@ updates:
 
 | 来源 | 内容 | 固定方式 |
 | --- | --- | --- |
-| runner 镜像 | Xcode、模拟器、Node | 固定 `macos-26`；`.ios-ci.yml` 显式写 Xcode、机型、iOS 版本 |
+| runner 镜像 | Xcode、模拟器、Node | Xcode 27 使用 `xcode-27`，26 使用 `macos-26`；`.ios-ci.yml` 显式写 Xcode、机型、iOS 版本 |
 | npm | xcodebuildmcp、serve-sim、icon-composer-mcp | 固定版本号 |
 | 二进制下载 | cloudflared、xcbeautify、SwiftLint、SwiftFormat、XcodeGen | 固定版本 + 校验 SHA-256 |
 | Swift 包（App 仓库） | swift-snapshot-testing、swift-dependencies 等 | `Package.resolved` 锁定 |

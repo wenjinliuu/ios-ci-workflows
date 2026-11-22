@@ -126,7 +126,7 @@ jobs:
       ${{ always() && !cancelled() && !inputs.lookup_only
       && (needs.test.result == 'success' || (needs.test.result == 'skipped' && needs.gate.outputs.reuse == 'true'))
       && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
-    runs-on: macos-26
+    runs-on: ${{ fromJSON(needs.config.outputs.config).toolchain.runner }}
     timeout-minutes: 55
     permissions:
       contents: read
